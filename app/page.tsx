@@ -44,7 +44,7 @@ export default function Page(){
   });
 
   const nextId = useMemo(()=>{
-    const max = prospects.reduce((m,p)=> Math.max(m, parseInt(p.id.split('-')[1] or '0')), 0);
+    const max = prospects.reduce((m,p)=> Math.max(m, parseInt(p.id.split('-')[1] || '0')), 0);
     return `PR-${String(max+1).padStart(6,'0')}`;
   },[prospects]);
 
