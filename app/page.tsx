@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { Prospect, Interaction, loadProspects, saveProspects, loadInteractions, saveInteractions } from '@/components/storage';
+import { Prospect, Interaction, loadProspects, saveProspects, loadInteractions, saveInteractions } from '../components/storage';
 
 const marches = ['Maroc','GCC','Afrique de l’Ouest','Autres'] as const;
 const produits = ['Crevette Vannamei (Équateur)','Crevette Muelleri (Argentine)','Corvina (Amérique du Sud)','Merlu Hubbsi (Argentine)','Jack Mackerel (CL/PE)'] as const;
