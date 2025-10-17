@@ -19,6 +19,7 @@ const statutsOffre = ['Envoyée','En négociation','Acceptée','Refusée'] as co
 function fmtUSD(v?: number|null, digits=2){ if(v==null||isNaN(v)) return '—'; return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:digits}).format(v); }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function diffDays(aISO?: string, bISO?: string){ if(!aISO||!bISO) return null; return Math.round((new Date(aISO).getTime()-new Date(bISO).getTime())/86400000); }
+function includesCI(hay: string, needle: string){ return hay.toLowerCase().includes(needle.toLowerCase()); }
 
 // --- Scoring ---
 function scoreProspect(p: Prospect, offres: Offre[], interactions30j: number) {
@@ -111,14 +112,15 @@ export default function App(){
 
   const ajd = todayStr();
   const relancesDuJour = useMemo(()=> prospects.filter(p=> p.relance && p.relance<=ajd && !['Signé','Perdu'].includes(p.statut)),[prospects]);
-
   const offresQuiExpirent = offres.filter(isExpiring);
+
+  // --- Scoring enrichi pour affichage et filtres ---
   const scored = useMemo(()=>{
     return prospects.map(p=>{
       const interactions30 = offres.filter(o => o.client.toLowerCase()===p.client.toLowerCase() && (diffDays(todayStr(), o.date_offre) as number) <= 30).length;
       const s = scoreProspect(p, offres, interactions30);
       return { ...p, _score:s.score, _grade:s.grade, _nba:s.nba };
-    }).sort((a,b)=> (b as any)._score - (a as any)._score);
+    });
   },[prospects,offres]);
 
   const suggestion = useMemo(()=>{
@@ -226,7 +228,104 @@ export default function App(){
     >
       {label}
     </button>
-  ); // <<< IMPORTANT : on ferme bien la fonction avant le return principal
+  );
+
+  // ===========================
+  // ======  FILTRES UI  =======
+  // ===========================
+
+  // --- Dashboard: Relances ---
+  const [fRel, setFRel] = useState({ id:'', client:'', marche:'', produit:'', statut:'', relance:'', sla:'' as ''|'Relance J+2 due'|'Relance J+7 due'|'—' });
+  const relancesFiltered = useMemo(()=>{
+    return relancesDuJour.filter(r=>{
+      if (fRel.id && !includesCI(r.id, fRel.id)) return false;
+      if (fRel.client && !includesCI(r.client, fRel.client)) return false;
+      if (fRel.marche && r.marche!==fRel.marche) return false;
+      if (fRel.produit && !includesCI(r.produit, fRel.produit)) return false;
+      if (fRel.statut && r.statut!==fRel.statut) return false;
+      if (fRel.relance && r.relance!==fRel.relance) return false;
+      if (fRel.sla){
+        const s = slaDue(r) || '—';
+        if (s!==fRel.sla) return false;
+      }
+      return true;
+    });
+  },[relancesDuJour,fRel]);
+
+  // --- Dashboard: Offres expirant <72h ---
+  const [fExp, setFExp] = useState({ id:'', client:'', produit:'', incoterm:'', prixMin:'', prixMax:'', date:'', validite:'', expire:'' });
+  const expiringFiltered = useMemo(()=>{
+    return offresQuiExpirent.filter(o=>{
+      if (fExp.id && !includesCI(o.id, fExp.id)) return false;
+      if (fExp.client && !includesCI(o.client, fExp.client)) return false;
+      if (fExp.produit && !includesCI(o.produit, fExp.produit)) return false;
+      if (fExp.incoterm && o.incoterm!==fExp.incoterm) return false;
+      if (fExp.prixMin && o.prix_usd_kg < Number(fExp.prixMin)) return false;
+      if (fExp.prixMax && o.prix_usd_kg > Number(fExp.prixMax)) return false;
+      if (fExp.date && o.date_offre!==fExp.date) return false;
+      if (fExp.validite && String(o.validite_jours||'')!==fExp.validite) return false;
+      if (fExp.expire){
+        const exp = o.validite_jours? addDays(o.date_offre, o.validite_jours):'';
+        if (exp!==fExp.expire) return false;
+      }
+      return true;
+    });
+  },[offresQuiExpirent,fExp]);
+
+  // --- Dashboard: Scoring ---
+  const [fSco, setFSco] = useState({ scoreMin:'', scoreMax:'', grade:'', client:'', produit:'', statut:'', relance:'', nba:'' });
+  const scoredFiltered = useMemo(()=>{
+    return [...scored].filter((p:any)=>{
+      if (fSco.scoreMin && p._score < Number(fSco.scoreMin)) return false;
+      if (fSco.scoreMax && p._score > Number(fSco.scoreMax)) return false;
+      if (fSco.grade && p._grade!==fSco.grade) return false;
+      if (fSco.client && !includesCI(p.client, fSco.client)) return false;
+      if (fSco.produit && !includesCI(p.produit, fSco.produit)) return false;
+      if (fSco.statut && p.statut!==fSco.statut) return false;
+      if (fSco.relance && (p.relance||'') !== fSco.relance) return false;
+      if (fSco.nba && !includesCI(p._nba, fSco.nba)) return false;
+      return true;
+    }).sort((a:any,b:any)=> b._score - a._score);
+  },[scored,fSco]);
+
+  // --- Prospects (liste principale) ---
+  const [fPros, setFPros] = useState({ id:'', client:'', marche:'', produit:'', statut:'', relance:'', grade:'', scoreMin:'', scoreMax:'' });
+  const prospectsFiltered = useMemo(()=>{
+    return scored.filter((p:any)=>{
+      if (fPros.id && !includesCI(p.id, fPros.id)) return false;
+      if (fPros.client && !includesCI(p.client, fPros.client)) return false;
+      if (fPros.marche && p.marche!==fPros.marche) return false;
+      if (fPros.produit && !includesCI(p.produit, fPros.produit)) return false;
+      if (fPros.statut && p.statut!==fPros.statut) return false;
+      if (fPros.relance && (p.relance||'')!==fPros.relance) return false;
+      if (fPros.grade && p._grade!==fPros.grade) return false;
+      if (fPros.scoreMin && p._score < Number(fPros.scoreMin)) return false;
+      if (fPros.scoreMax && p._score > Number(fPros.scoreMax)) return false;
+      return true;
+    }).sort((a:any,b:any)=> b._score - a._score);
+  },[scored,fPros]);
+
+  // --- Offres (historique) ---
+  const [fOff, setFOff] = useState({ id:'', prospect:'', client:'', marche:'', produit:'', calibre:'', incoterm:'', prixMin:'', prixMax:'', volMin:'', volMax:'', date:'', validite:'', statut:'' });
+  const offresFiltered = useMemo(()=>{
+    return offres.filter(o=>{
+      if (fOff.id && !includesCI(o.id, fOff.id)) return false;
+      if (fOff.prospect && !includesCI(o.prospectId||'', fOff.prospect)) return false;
+      if (fOff.client && !includesCI(o.client, fOff.client)) return false;
+      if (fOff.marche && o.marche!==fOff.marche) return false;
+      if (fOff.produit && !includesCI(o.produit, fOff.produit)) return false;
+      if (fOff.calibre && !includesCI(o.calibre||'', fOff.calibre)) return false;
+      if (fOff.incoterm && o.incoterm!==fOff.incoterm) return false;
+      if (fOff.prixMin && o.prix_usd_kg < Number(fOff.prixMin)) return false;
+      if (fOff.prixMax && o.prix_usd_kg > Number(fOff.prixMax)) return false;
+      if (fOff.volMin && o.volume_kg < Number(fOff.volMin)) return false;
+      if (fOff.volMax && o.volume_kg > Number(fOff.volMax)) return false;
+      if (fOff.date && o.date_offre!==fOff.date) return false;
+      if (fOff.validite && String(o.validite_jours||'')!==fOff.validite) return false;
+      if (fOff.statut && o.statut_offre!==fOff.statut) return false;
+      return true;
+    });
+  },[offres,fOff]);
 
   return (
     <div className="container py-6 space-y-6">
@@ -261,67 +360,137 @@ export default function App(){
               <div><b>USD→EUR :</b> {(usdEur||0).toFixed(4)}</div>
             </div></div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="card"><div className="card-body"><div className="text-gray-500 text-sm">Taux de réponse</div><div className="text-2xl font-semibold">{(tauxReponse*100).toFixed(0)}%</div></div></div>
-              <div className="card"><div className="card-body"><div className="text-gray-500 text-sm">Taux de conversion</div><div className="text-2xl font-semibold">{(tauxConv*100).toFixed(0)}%</div></div></div>
-              <div className="card"><div className="card-body"><div className="text-gray-500 text-sm">Prospects actifs</div><div className="text-2xl font-semibold">{prospects.length}</div></div></div>
-            </div>
-
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Relances à faire */}
               <div className="card">
                 <div className="card-header">Relances à faire aujourd’hui</div>
                 <div className="card-body overflow-auto">
                   <table className="min-w-full text-sm">
-                    <thead><tr>{['ID','Client','Marché','Produit','Statut','Relance','SLA'].map(h => <th key={h} className='th'>{h}</th>)}</tr></thead>
+                    <thead>
+                      <tr>{['ID','Client','Marché','Produit','Statut','Prochaine relance','SLA'].map(h => <th key={h} className='th'>{h}</th>)}</tr>
+                      <tr>
+                        <th className="th"><input className="input" placeholder="filtrer" value={fRel.id} onChange={e=>setFRel({...fRel,id:e.target.value})}/></th>
+                        <th className="th"><input className="input" placeholder="filtrer" value={fRel.client} onChange={e=>setFRel({...fRel,client:e.target.value})}/></th>
+                        <th className="th">
+                          <select className="select" value={fRel.marche} onChange={e=>setFRel({...fRel,marche:e.target.value})}>
+                            <option value="">(tous)</option>{marches.map(m=><option key={m} value={m}>{m}</option>)}
+                          </select>
+                        </th>
+                        <th className="th"><input className="input" placeholder="filtrer" value={fRel.produit} onChange={e=>setFRel({...fRel,produit:e.target.value})}/></th>
+                        <th className="th">
+                          <select className="select" value={fRel.statut} onChange={e=>setFRel({...fRel,statut:e.target.value})}>
+                            <option value="">(tous)</option>{statutsProspect.map(s=><option key={s} value={s}>{s}</option>)}
+                          </select>
+                        </th>
+                        <th className="th"><input type="date" className="input" value={fRel.relance} onChange={e=>setFRel({...fRel,relance:e.target.value})}/></th>
+                        <th className="th">
+                          <select className="select" value={fRel.sla} onChange={e=>setFRel({...fRel,sla:e.target.value as any})}>
+                            <option value="">(tous)</option>
+                            <option>Relance J+2 due</option>
+                            <option>Relance J+7 due</option>
+                            <option>—</option>
+                          </select>
+                        </th>
+                      </tr>
+                    </thead>
                     <tbody>
-                      {relancesDuJour.map(r => (
+                      {relancesFiltered.map(r => (
                         <tr key={r.id}>
                           <td className='td'>{r.id}</td><td className='td'>{r.client}</td><td className='td'>{r.marche}</td><td className='td'>{r.produit}</td><td className='td'>{r.statut}</td><td className='td'>{r.relance}</td><td className='td'>{slaDue(r)||'—'}</td>
                         </tr>
                       ))}
-                      {relancesDuJour.length===0 && <tr><td className='td text-center text-gray-500' colSpan={7}>Aucune relance due.</td></tr>}
+                      {relancesFiltered.length===0 && <tr><td className='td text-center text-gray-500' colSpan={7}>Aucun résultat.</td></tr>}
                     </tbody>
                   </table>
                 </div>
               </div>
 
+              {/* Expirations */}
               <div className="card">
                 <div className="card-header">Offres qui expirent &lt; 72h</div>
                 <div className="card-body overflow-auto">
                   <table className="min-w-full text-sm">
-                    <thead><tr>{['ID','Client','Produit','Incoterm','Prix USD/kg','Date','Validité','Expire le'].map(h => <th key={h} className='th'>{h}</th>)}</tr></thead>
+                    <thead>
+                      <tr>{['ID','Client','Produit','Incoterm','Prix USD/kg','Date','Validité','Expire le'].map(h => <th key={h} className='th'>{h}</th>)}</tr>
+                      <tr>
+                        <th className="th"><input className="input" value={fExp.id} onChange={e=>setFExp({...fExp,id:e.target.value})}/></th>
+                        <th className="th"><input className="input" value={fExp.client} onChange={e=>setFExp({...fExp,client:e.target.value})}/></th>
+                        <th className="th"><input className="input" value={fExp.produit} onChange={e=>setFExp({...fExp,produit:e.target.value})}/></th>
+                        <th className="th">
+                          <select className="select" value={fExp.incoterm} onChange={e=>setFExp({...fExp,incoterm:e.target.value})}>
+                            <option value="">(tous)</option>
+                            {['FOB','CFR','CIF','EXW'].map(i=><option key={i} value={i}>{i}</option>)}
+                          </select>
+                        </th>
+                        <th className="th">
+                          <div className="flex gap-1">
+                            <input className="input" placeholder="min" value={fExp.prixMin} onChange={e=>setFExp({...fExp,prixMin:e.target.value})}/>
+                            <input className="input" placeholder="max" value={fExp.prixMax} onChange={e=>setFExp({...fExp,prixMax:e.target.value})}/>
+                          </div>
+                        </th>
+                        <th className="th"><input type="date" className="input" value={fExp.date} onChange={e=>setFExp({...fExp,date:e.target.value})}/></th>
+                        <th className="th"><input className="input" placeholder="ex: 15" value={fExp.validite} onChange={e=>setFExp({...fExp,validite:e.target.value})}/></th>
+                        <th className="th"><input type="date" className="input" value={fExp.expire} onChange={e=>setFExp({...fExp,expire:e.target.value})}/></th>
+                      </tr>
+                    </thead>
                     <tbody>
-                      {offresQuiExpirent.map(o => (
+                      {expiringFiltered.map(o => (
                         <tr key={o.id}>
                           <td className="td">{o.id}</td><td className="td">{o.client}</td><td className="td">{o.produit}</td><td className="td">{o.incoterm}</td>
                           <td className="td">{o.prix_usd_kg.toFixed(2)}</td><td className="td">{o.date_offre}</td><td className="td">{o.validite_jours||'—'}</td><td className="td">{o.validite_jours? addDays(o.date_offre, o.validite_jours):'—'}</td>
                         </tr>
                       ))}
-                      {offresQuiExpirent.length===0 && <tr><td className='td text-center text-gray-500' colSpan={8}>Aucune expiration proche.</td></tr>}
+                      {expiringFiltered.length===0 && <tr><td className='td text-center text-gray-500' colSpan={8}>Aucun résultat.</td></tr>}
                     </tbody>
                   </table>
                 </div>
               </div>
             </div>
 
+            {/* Scoring */}
             <div className="card">
               <div className="card-header">Priorités (Scoring A/B/C/D)</div>
               <div className="card-body overflow-auto">
                 <table className="min-w-full text-sm">
-                  <thead><tr>{['Score','Grade','Client','Produit','Statut','Relance','Next Best Action'].map(h => <th key={h} className='th'>{h}</th>)}</tr></thead>
+                  <thead>
+                    <tr>{['Score','Grade','Client','Produit','Statut','Relance','Next Best Action'].map(h => <th key={h} className='th'>{h}</th>)}</tr>
+                    <tr>
+                      <th className="th">
+                        <div className="flex gap-1">
+                          <input className="input" placeholder="min" value={fSco.scoreMin} onChange={e=>setFSco({...fSco,scoreMin:e.target.value})}/>
+                          <input className="input" placeholder="max" value={fSco.scoreMax} onChange={e=>setFSco({...fSco,scoreMax:e.target.value})}/>
+                        </div>
+                      </th>
+                      <th className="th">
+                        <select className="select" value={fSco.grade} onChange={e=>setFSco({...fSco,grade:e.target.value})}>
+                          <option value="">(tous)</option>
+                          {['A','B','C','D'].map(g=><option key={g} value={g}>{g}</option>)}
+                        </select>
+                      </th>
+                      <th className="th"><input className="input" value={fSco.client} onChange={e=>setFSco({...fSco,client:e.target.value})}/></th>
+                      <th className="th"><input className="input" value={fSco.produit} onChange={e=>setFSco({...fSco,produit:e.target.value})}/></th>
+                      <th className="th">
+                        <select className="select" value={fSco.statut} onChange={e=>setFSco({...fSco,statut:e.target.value})}>
+                          <option value="">(tous)</option>{statutsProspect.map(s=><option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </th>
+                      <th className="th"><input type="date" className="input" value={fSco.relance} onChange={e=>setFSco({...fSco,relance:e.target.value})}/></th>
+                      <th className="th"><input className="input" placeholder="filtrer" value={fSco.nba} onChange={e=>setFSco({...fSco,nba:e.target.value})}/></th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {scored.map(p=>(
+                    {scoredFiltered.map((p:any)=>(
                       <tr key={p.id}>
-                        <td className="td font-medium">{(p as any)._score}</td>
-                        <td className="td">{(p as any)._grade}</td>
+                        <td className="td font-medium">{p._score}</td>
+                        <td className="td">{p._grade}</td>
                         <td className="td">{p.client}</td>
                         <td className="td">{p.produit}</td>
                         <td className="td">{p.statut}</td>
                         <td className="td">{p.relance||'—'}</td>
-                        <td className="td">{(p as any)._nba}</td>
+                        <td className="td">{p._nba}</td>
                       </tr>
                     ))}
-                    {scored.length===0 && <tr><td className='td text-center text-gray-500' colSpan={7}>Aucun prospect.</td></tr>}
+                    {scoredFiltered.length===0 && <tr><td className='td text-center text-gray-500' colSpan={7}>Aucun résultat.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -331,27 +500,22 @@ export default function App(){
 
         {tab==='prospects' && (
           <motion.div key="pros" initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}} transition={{duration:.15}} className="space-y-6">
+            {/* Formulaire */}
             <div className="card">
               <div className="card-header">Ajouter un prospect</div>
               <div className="card-body grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
                   <label className="text-sm text-gray-600">Client / Prospect</label>
                   <input list="lstClients" className="input" placeholder="ex: Congelcam" value={pForm.client} onChange={e=>setPForm({...pForm, client:e.target.value})}/>
-                  <datalist id="lstClients">
-                    {refs.clients.map(c => <option key={c} value={c} />)}
-                  </datalist>
+                  <datalist id="lstClients">{refs.clients.map(c => <option key={c} value={c} />)}</datalist>
                 </div>
                 <div><label className="text-sm text-gray-600">Marché</label>
-                  <select className="select" value={pForm.marche} onChange={e=>setPForm({...pForm, marche:e.target.value as any})}>
-                    {marches.map(m => <option key={m} value={m}>{m}</option>)}
-                  </select>
+                  <select className="select" value={pForm.marche} onChange={e=>setPForm({...pForm, marche:e.target.value as any})}>{marches.map(m => <option key={m} value={m}>{m}</option>)}</select>
                 </div>
                 <div>
                   <label className="text-sm text-gray-600">Produit</label>
                   <input list="lstProduits" className="input" value={pForm.produit} onChange={e=>setPForm({...pForm, produit:e.target.value})}/>
-                  <datalist id="lstProduits">
-                    {refs.produits.map(p => <option key={p} value={p} />)}
-                  </datalist>
+                  <datalist id="lstProduits">{refs.produits.map(p => <option key={p} value={p} />)}</datalist>
                 </div>
 
                 <div><label className="text-sm text-gray-600">Date 1er contact</label><input className="input" type="date" value={pForm.dContact} onChange={e=>setPForm({...pForm, dContact:e.target.value})}/></div>
@@ -371,13 +535,44 @@ export default function App(){
               <div className="card-body flex justify-end"><button className="btn" onClick={addProspect}>Ajouter</button></div>
             </div>
 
+            {/* Prospects list + filtres */}
             <div className="card">
-              <div className="card-header">Liste des prospects (édition inline Statut / Relance)</div>
+              <div className="card-header">Liste des prospects (édition inline + filtres)</div>
               <div className="card-body overflow-auto">
                 <table className="min-w-full text-sm">
-                  <thead><tr>{['Score','Grade','ID','Client','Marché','Produit','Statut','Relance','SLA'].map(h => <th key={h} className='th'>{h}</th>)}</tr></thead>
+                  <thead>
+                    <tr>{['Score','Grade','ID','Client','Marché','Produit','Statut','Relance','SLA'].map(h => <th key={h} className='th'>{h}</th>)}</tr>
+                    <tr>
+                      <th className="th">
+                        <div className="flex gap-1">
+                          <input className="input" placeholder="min" value={fPros.scoreMin} onChange={e=>setFPros({...fPros,scoreMin:e.target.value})}/>
+                          <input className="input" placeholder="max" value={fPros.scoreMax} onChange={e=>setFPros({...fPros,scoreMax:e.target.value})}/>
+                        </div>
+                      </th>
+                      <th className="th">
+                        <select className="select" value={fPros.grade} onChange={e=>setFPros({...fPros,grade:e.target.value})}>
+                          <option value="">(tous)</option>{['A','B','C','D'].map(g=><option key={g} value={g}>{g}</option>)}
+                        </select>
+                      </th>
+                      <th className="th"><input className="input" value={fPros.id} onChange={e=>setFPros({...fPros,id:e.target.value})}/></th>
+                      <th className="th"><input className="input" value={fPros.client} onChange={e=>setFPros({...fPros,client:e.target.value})}/></th>
+                      <th className="th">
+                        <select className="select" value={fPros.marche} onChange={e=>setFPros({...fPros,marche:e.target.value})}>
+                          <option value="">(tous)</option>{marches.map(m=><option key={m} value={m}>{m}</option>)}
+                        </select>
+                      </th>
+                      <th className="th"><input className="input" value={fPros.produit} onChange={e=>setFPros({...fPros,produit:e.target.value})}/></th>
+                      <th className="th">
+                        <select className="select" value={fPros.statut} onChange={e=>setFPros({...fPros,statut:e.target.value})}>
+                          <option value="">(tous)</option>{statutsProspect.map(s=><option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </th>
+                      <th className="th"><input type="date" className="input" value={fPros.relance} onChange={e=>setFPros({...fPros,relance:e.target.value})}/></th>
+                      <th className="th">—</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {scored.map((p:any)=>(
+                    {prospectsFiltered.map((p:any)=>(
                       <tr key={p.id}>
                         <td className="td font-medium">{p._score}</td>
                         <td className="td">{p._grade}</td>
@@ -390,13 +585,11 @@ export default function App(){
                             {statutsProspect.map(s=> <option key={s} value={s}>{s}</option>)}
                           </select>
                         </td>
-                        <td className="td">
-                          <input className="input" type="date" value={p.relance||''} onChange={e=>updateProspectInline(p.id,{relance: e.target.value})}/>
-                        </td>
+                        <td className="td"><input className="input" type="date" value={p.relance||''} onChange={e=>updateProspectInline(p.id,{relance: e.target.value})}/></td>
                         <td className="td">{slaDue(p)||'—'}</td>
                       </tr>
                     ))}
-                    {scored.length===0 && <tr><td className="td text-center text-gray-500" colSpan={9}>Aucun prospect.</td></tr>}
+                    {prospectsFiltered.length===0 && <tr><td className="td text-center text-gray-500" colSpan={9}>Aucun résultat.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -406,6 +599,7 @@ export default function App(){
 
         {tab==='offres' && (
           <motion.div key="off" initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}} transition={{duration:.15}} className="space-y-6">
+            {/* Formulaire offre */}
             <div className="card">
               <div className="card-header">Nouvelle offre (USD/kg)</div>
               <div className="card-body grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -475,13 +669,52 @@ export default function App(){
               <div className="card-body flex justify-end"><button className="btn" onClick={addOffre}>Enregistrer l’offre</button></div>
             </div>
 
+            {/* Historique offres + filtres */}
             <div className="card">
               <div className="card-header">Historique des offres</div>
               <div className="card-body overflow-auto">
                 <table className="min-w-full text-sm">
-                  <thead><tr>{['ID','Prospect','Client','Marché','Produit','Calibre','Incoterm','Prix USD/kg','Volume (kg)','Date','Validité','Statut'].map(h => <th key={h} className='th'>{h}</th>)}</tr></thead>
+                  <thead>
+                    <tr>{['ID','Prospect','Client','Marché','Produit','Calibre','Incoterm','Prix USD/kg','Volume (kg)','Date','Validité','Statut'].map(h => <th key={h} className='th'>{h}</th>)}</tr>
+                    <tr>
+                      <th className="th"><input className="input" value={fOff.id} onChange={e=>setFOff({...fOff,id:e.target.value})}/></th>
+                      <th className="th"><input className="input" value={fOff.prospect} onChange={e=>setFOff({...fOff,prospect:e.target.value})}/></th>
+                      <th className="th"><input className="input" value={fOff.client} onChange={e=>setFOff({...fOff,client:e.target.value})}/></th>
+                      <th className="th">
+                        <select className="select" value={fOff.marche} onChange={e=>setFOff({...fOff,marche:e.target.value})}>
+                          <option value="">(tous)</option>{marches.map(m=><option key={m} value={m}>{m}</option>)}
+                        </select>
+                      </th>
+                      <th className="th"><input className="input" value={fOff.produit} onChange={e=>setFOff({...fOff,produit:e.target.value})}/></th>
+                      <th className="th"><input className="input" value={fOff.calibre} onChange={e=>setFOff({...fOff,calibre:e.target.value})}/></th>
+                      <th className="th">
+                        <select className="select" value={fOff.incoterm} onChange={e=>setFOff({...fOff,incoterm:e.target.value})}>
+                          <option value="">(tous)</option>{['FOB','CFR','CIF','EXW'].map(i=><option key={i} value={i}>{i}</option>)}
+                        </select>
+                      </th>
+                      <th className="th">
+                        <div className="flex gap-1">
+                          <input className="input" placeholder="min" value={fOff.prixMin} onChange={e=>setFOff({...fOff,prixMin:e.target.value})}/>
+                          <input className="input" placeholder="max" value={fOff.prixMax} onChange={e=>setFOff({...fOff,prixMax:e.target.value})}/>
+                        </div>
+                      </th>
+                      <th className="th">
+                        <div className="flex gap-1">
+                          <input className="input" placeholder="min" value={fOff.volMin} onChange={e=>setFOff({...fOff,volMin:e.target.value})}/>
+                          <input className="input" placeholder="max" value={fOff.volMax} onChange={e=>setFOff({...fOff,volMax:e.target.value})}/>
+                        </div>
+                      </th>
+                      <th className="th"><input type="date" className="input" value={fOff.date} onChange={e=>setFOff({...fOff,date:e.target.value})}/></th>
+                      <th className="th"><input className="input" placeholder="ex: 15" value={fOff.validite} onChange={e=>setFOff({...fOff,validite:e.target.value})}/></th>
+                      <th className="th">
+                        <select className="select" value={fOff.statut} onChange={e=>setFOff({...fOff,statut:e.target.value})}>
+                          <option value="">(tous)</option>{statutsOffre.map(s=><option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {offres.map(o=>(
+                    {offresFiltered.map(o=>(
                       <tr key={o.id}>
                         <td className="td">{o.id}</td>
                         <td className="td">{o.prospectId || '—'}</td>
@@ -497,7 +730,7 @@ export default function App(){
                         <td className="td">{o.statut_offre}</td>
                       </tr>
                     ))}
-                    {offres.length===0 && <tr><td className="td text-center text-gray-500" colSpan={12}>Aucune offre enregistrée.</td></tr>}
+                    {offresFiltered.length===0 && <tr><td className="td text-center text-gray-500" colSpan={12}>Aucun résultat.</td></tr>}
                   </tbody>
                 </table>
               </div>
