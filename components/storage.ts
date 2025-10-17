@@ -1,3 +1,5 @@
+// components/storage.ts
+
 export type Prospect = {
   id: string; client: string; marche: string; produit: string;
   dContact: string; offre: 'Oui'|'Non'; dOffre?: string; montant?: number|null;
@@ -20,10 +22,17 @@ export type Offre = {
   note?: string;
 };
 
+// ---- Référentiels (Clients / Produits) ----
+export type Refs = {
+  clients: string[];
+  produits: string[];
+};
+
 const LS_KEYS = {
   prospects: 'cmr_prospects',
   interactions: 'cmr_interactions',
-  offres: 'cmr_offres'
+  offres: 'cmr_offres',
+  refs: 'cmr_refs'
 };
 
 // ---------- Prospects ----------
@@ -59,14 +68,57 @@ export function saveOffres(rows: Offre[]) {
   localStorage.setItem(LS_KEYS.offres, JSON.stringify(rows));
 }
 
+// ---------- Référentiels ----------
+const DEFAULT_PRODUITS = [
+  'Crevette Vannamei (Équateur)',
+  'Crevette Muelleri (Argentine)',
+  'Corvina (Amérique du Sud)',
+  'Merlu Hubbsi (Argentine)',
+  'Jack Mackerel (CL/PE)'
+];
+
+export function loadRefs(): Refs {
+  if (typeof window === 'undefined') return { clients: [], produits: DEFAULT_PRODUITS };
+  const raw = localStorage.getItem(LS_KEYS.refs);
+  if (!raw) {
+    const seed = { clients: [], produits: DEFAULT_PRODUITS };
+    localStorage.setItem(LS_KEYS.refs, JSON.stringify(seed));
+    return seed;
+  }
+  const parsed = JSON.parse(raw) as Refs;
+  // sécurité : si produits vide, réensemencer
+  if (!parsed.produits || parsed.produits.length === 0) parsed.produits = DEFAULT_PRODUITS;
+  return parsed;
+}
+export function saveRefs(refs: Refs) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(LS_KEYS.refs, JSON.stringify(refs));
+}
+export function upsertClient(name: string) {
+  if (!name) return;
+  const r = loadRefs();
+  if (!r.clients.map(x=>x.toLowerCase()).includes(name.toLowerCase())) {
+    r.clients = [name, ...r.clients];
+    saveRefs(r);
+  }
+}
+export function upsertProduit(name: string) {
+  if (!name) return;
+  const r = loadRefs();
+  if (!r.produits.map(x=>x.toLowerCase()).includes(name.toLowerCase())) {
+    r.produits = [name, ...r.produits];
+    saveRefs(r);
+  }
+}
+
 // ---------- Utilities ----------
 export function resetAll() {
   if (typeof window === 'undefined') return;
   localStorage.removeItem(LS_KEYS.prospects);
   localStorage.removeItem(LS_KEYS.interactions);
   localStorage.removeItem(LS_KEYS.offres);
+  localStorage.removeItem(LS_KEYS.refs);
 }
-
 export function nextId(prefix: string, existing: {id:string}[]) {
   const max = existing.reduce((m, r) => Math.max(m, parseInt((r.id.split('-')[1]||'0'), 10)), 0);
   return `${prefix}-${String(max+1).padStart(6,'0')}`;
