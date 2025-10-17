@@ -270,7 +270,6 @@ export default function App(){
     >
       {label}
     </button>
-  );
 
   return (
     <div className="container py-6 space-y-6">
