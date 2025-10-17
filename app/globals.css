@@ -18,3 +18,16 @@ body { @apply bg-gray-50 text-gray-900; }
 .input:focus, .select:focus { box-shadow: 0 0 0 3px rgba(37,99,235,.2); }
 .btn { transition: transform .05s; }
 .btn:active { transform: translateY(1px); }
+/* Focus & clics */
+.input, .select { outline: none; transition: box-shadow .15s; }
+.input:focus, .select:focus { box-shadow: 0 0 0 3px rgba(37,99,235,.2); }
+.btn { transition: transform .05s; }
+.btn:active { transform: translateY(1px); }
+
+/* Impression propre */
+@media print {
+  body { background: white; }
+  .container { max-width: none; padding: 0; }
+  .card { box-shadow: none; border: 1px solid #e5e7eb; }
+  .btn, .select, .input { display: none !important; }
+}
