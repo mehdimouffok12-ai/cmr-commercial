@@ -22,35 +22,19 @@ function diffDays(aISO?: string, bISO?: string){ if(!aISO||!bISO) return null; r
 
 // --- Scoring ---
 function scoreProspect(p: Prospect, offres: Offre[], interactions30j: number) {
-  // Récence (jours depuis relance OU 1er contact)
   const lastDate = p.relance || p.dContact;
   const daysSince = lastDate ? Math.max(0, diffDays(todayStr(), lastDate) || 0) : 999;
   const recence = Math.max(0, 100 - Math.min(100, daysSince*5)); // 0..100
-
-  // Fréquence ~ interactions/30j (simulé ici par nb d'offres liées + 1 si statut négociation)
   const freq = Math.min(100, interactions30j*25);
-
-  // Potentiel = somme des offres ouvertes liées à ce client (30j)
   const pot = offres
     .filter(o => o.client.toLowerCase()===p.client.toLowerCase() && (!o.statut_offre || ['Envoyée','En négociation'].includes(o.statut_offre)))
     .reduce((s,o)=> s + (o.prix_usd_kg * o.volume_kg), 0);
-  const potScaled = Math.min(100, Math.log10(1 + pot/1000) * 40); // échelle douce
-
-  // Vitesse de réponse: si Réponse=Oui, délai contact->réponse
+  const potScaled = Math.min(100, Math.log10(1 + pot/1000) * 40);
   const vitesse = p.reponse==='Oui' && p.dReponse ? Math.max(0, 100 - Math.min(100, (diffDays(p.dReponse, p.dContact) || 0)*10)) : 50;
-
-  // Poids par statut
   const statutW = { 'Signé':100, 'En négociation':70, 'Offre envoyée':40, 'À qualifier':20, 'Perdu':0 } as const;
   const statutScore = statutW[p.statut] ?? 0;
 
-  const score = Math.round(
-    0.30*recence +
-    0.20*freq +
-    0.25*potScaled +
-    0.15*vitesse +
-    0.10*statutScore
-  );
-
+  const score = Math.round(0.30*recence + 0.20*freq + 0.25*potScaled + 0.15*vitesse + 0.10*statutScore);
   const grade = score>=75?'A' : score>=60?'B' : score>=40?'C' : 'D';
   const nba = grade==='A' ? 'Relancer aujourd’hui (prix/marge)'
     : grade==='B' ? 'Demander feedback précis (points bloquants)'
@@ -93,7 +77,6 @@ function slaDue(p: Prospect){
 export default function App(){
   const [tab,setTab] = useState<'dashboard'|'prospects'|'offres'|'referentiels'|'saisonnier'>('dashboard');
 
-  // Données
   const [prospects,setProspects]=useState<Prospect[]>([]);
   const [offres,setOffres]=useState<Offre[]>([]);
   const [refs,setRefs]=useState<Refs>({clients:[], produits:[], benchmarks:[]});
@@ -103,11 +86,8 @@ export default function App(){
   useEffect(()=>{ saveProspects(prospects); },[prospects]);
   useEffect(()=>{ saveOffres(offres); },[offres]);
   useEffect(()=>{ saveRefs(refs); },[refs]);
-
-  // FX
   useEffect(()=>{ getUsdEur().then(setUsdEur); },[]);
 
-  // Formulaires
   const [pForm,setPForm]=useState<Prospect>({
     id:'', client:'', marche:'Maroc', produit:'', dContact: todayStr(),
     offre:'Non', dOffre:'', montant: undefined, statut:'À qualifier',
@@ -119,42 +99,33 @@ export default function App(){
     id:'', client:'', marche:'Maroc', produit:'', calibre:'',
     incoterm:'CFR', prix_usd_kg:0, volume_kg:0,
     date_offre: todayStr(), validite_jours:15, statut_offre:'Envoyée',
-    prix_achat_usd_kg: undefined, fret_usd_kg: undefined, autres_frais_usd_kg: undefined,
-    note:''
+    prix_achat_usd_kg: undefined, fret_usd_kg: undefined, autres_frais_usd_kg: undefined, note:''
   });
   useEffect(()=>{ setOForm(prev=> ({...prev, produit: prev.produit || (refs.produits[0]||'')})); },[refs]);
 
-  // KPI simples
   const offresEnv = prospects.filter(p=>p.offre==='Oui').length;
   const reps = prospects.filter(p=>p.reponse==='Oui').length;
   const signes = prospects.filter(p=>p.statut==='Signé').length;
   const tauxReponse = offresEnv? (reps/offresEnv):0;
   const tauxConv = offresEnv? (signes/offresEnv):0;
 
-  // Relances du jour
   const ajd = todayStr();
   const relancesDuJour = useMemo(()=> prospects.filter(p=> p.relance && p.relance<=ajd && !['Signé','Perdu'].includes(p.statut)),[prospects]);
 
-  // Expirations & SLA
   const offresQuiExpirent = offres.filter(isExpiring);
-  const slaList = prospects.map(p => ({ p, sla: slaDue(p) })).filter(x=>x.sla);
-
-  // Scoring
   const scored = useMemo(()=>{
     return prospects.map(p=>{
-      const interactions30 = offres.filter(o => o.client.toLowerCase()===p.client.toLowerCase() && diffDays(todayStr(), o.date_offre)!<=30).length;
+      const interactions30 = offres.filter(o => o.client.toLowerCase()===p.client.toLowerCase() && (diffDays(todayStr(), o.date_offre) as number) <= 30).length;
       const s = scoreProspect(p, offres, interactions30);
       return { ...p, _score:s.score, _grade:s.grade, _nba:s.nba };
     }).sort((a,b)=> (b as any)._score - (a as any)._score);
   },[prospects,offres]);
 
-  // Suggestions pour le formulaire d’offre
   const suggestion = useMemo(()=>{
     if (!oForm.produit || !oForm.marche || !oForm.incoterm) return null;
     return suggestPrice(offres, { produit: oForm.produit, marche: oForm.marche, incoterm: oForm.incoterm, calibre: oForm.calibre });
   },[oForm,offres]);
 
-  // Actions
   function addProspect(){
     if(!pForm.client.trim()) return alert('Client / Prospect obligatoire');
     if(!pForm.produit) return alert('Produit obligatoire');
@@ -182,7 +153,6 @@ export default function App(){
     if(!oForm.prix_usd_kg || oForm.prix_usd_kg<=0) return alert('Prix USD/kg requis (>0)');
     if(!oForm.volume_kg || oForm.volume_kg<=0) return alert('Volume (kg) requis (>0)');
 
-    // Guard ±3% vs médiane 30j (si dispo)
     if (suggestion?.mediane){
       const delta = Math.abs(oForm.prix_usd_kg - suggestion.mediane) / suggestion.mediane;
       if (delta > 0.03 && !confirm(`⚠️ Prix s’écarte de ${(delta*100).toFixed(1)}% de la médiane (${suggestion.mediane.toFixed(2)} USD/kg). Continuer ?`)) {
@@ -221,7 +191,6 @@ export default function App(){
     if(confirm('Réinitialiser toutes les données (prospects, offres, référentiels, FX) ?')) { resetAll(); location.reload(); }
   }
 
-  // Export / Import JSON
   function exportJSON(){
     const blob = new Blob([JSON.stringify({prospects, offres, refs}, null, 2)], {type: 'application/json'});
     const url = URL.createObjectURL(blob);
@@ -243,26 +212,13 @@ export default function App(){
     e.target.value = '';
   }
 
-  // Simulateur marge
   const cout_usd_kg = (oForm.prix_achat_usd_kg||0) + (oForm.fret_usd_kg||0) + (oForm.autres_frais_usd_kg||0);
   const marge_usd_kg = (oForm.prix_usd_kg||0) - (cout_usd_kg||0);
   const marge_totale = marge_usd_kg * (oForm.volume_kg||0);
 
-  // Saisonnière (heatmap simple)
   const produitsList = refs.produits.length? refs.produits : ['Crevette Vannamei (Équateur)'];
-  const heat = useMemo(()=>{
-    const m = new Map<string, Map<string, number>>(); // produit -> mois -> somme ventes
-    const signed = offres.filter(o => o.statut_offre==='Acceptée'); // ou relier à prospects Signé
-    for(const o of signed){
-      const mo = monthStr(o.date_offre);
-      if(!m.has(o.produit)) m.set(o.produit, new Map());
-      const mm = m.get(o.produit)!;
-      mm.set(mo, (mm.get(mo)||0) + (o.prix_usd_kg * o.volume_kg));
-    }
-    return m;
-  },[offres]);
 
-  // UI Helpers
+  // UI helper: Tab button
   const TabBtn = ({id,label}:{id:any;label:string})=>(
     <button
       className={`px-4 py-2 rounded-xl border ${tab===id?'bg-blue-600 text-white border-blue-600':'bg-white text-gray-700 hover:bg-gray-50'}`}
@@ -270,6 +226,7 @@ export default function App(){
     >
       {label}
     </button>
+  ); // <<< IMPORTANT : on ferme bien la fonction avant le return principal
 
   return (
     <div className="container py-6 space-y-6">
@@ -300,7 +257,7 @@ export default function App(){
           <motion.div key="dash" initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}} transition={{duration:.15}} className="space-y-6">
             <div className="card"><div className="card-body text-sm flex flex-wrap gap-6 items-center">
               <div><b>Rappels du jour :</b> {relancesDuJour.length===0 ? 'aucune relance due' : `${relancesDuJour.length} relance(s)`}</div>
-              <div><b>Offres expirant <72h :</b> {offresQuiExpirent.length}</div>
+              <div><b>Offres expirant &lt;72h :</b> {offresQuiExpirent.length}</div>
               <div><b>USD→EUR :</b> {(usdEur||0).toFixed(4)}</div>
             </div></div>
 
@@ -612,7 +569,6 @@ export default function App(){
                         <td className="td font-medium">{prod}</td>
                         {Array.from({length:12}).map((_,i)=>{
                           const mo = `${new Date().getFullYear()}-${String(i+1).padStart(2,'0')}`;
-                          // somme signées pour ce produit et mois
                           const val = offres.filter(o=> o.produit===prod && o.statut_offre==='Acceptée' && monthStr(o.date_offre)===mo).reduce((s,o)=> s + (o.prix_usd_kg*o.volume_kg), 0);
                           const tone = val===0 ? 'text-gray-400' : val>50000 ? 'text-green-700' : 'text-amber-700';
                           return <td key={mo} className={`td ${tone}`}>{val? fmtUSD(val,0): '—'}</td>;
