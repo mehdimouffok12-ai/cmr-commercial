@@ -19,7 +19,6 @@ const statutsOffre = ['Envoyée','En négociation','Acceptée','Refusée'] as co
 function fmtUSD(v?: number|null, digits=2){ if(v==null||isNaN(v)) return '—'; return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:digits}).format(v); }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function diffDays(aISO?: string, bISO?: string){ if(!aISO||!bISO) return null; return Math.round((new Date(aISO).getTime()-new Date(bISO).getTime())/86400000); }
-function includesCI(hay: string, needle: string){ return hay.toLowerCase().includes(needle.toLowerCase()); }
 
 // --- Scoring ---
 function scoreProspect(p: Prospect, offres: Offre[], interactions30j: number) {
@@ -63,7 +62,7 @@ function suggestPrice(offres: Offre[], params: {produit: string; marche: string;
 }
 
 // --- Validité & SLA ---
-function isExpiring(o: Offre){ if(!o.validite_jours) return false; const exp = addDays(o.date_offre, o.validite_jours); return diffDays(exp, todayStr())!==null && (diffDays(exp, todayStr()) as number) <= 3; }
+function isExpiring(o: Offre){ if(!o.validite_jours) return false; const exp = addDays(o.date_offre, o.validite_jours); const d = diffDays(exp, todayStr()); return d!==null && d <= 3; }
 function slaDue(p: Prospect){
   if (p.offre!=='Oui' || !p.dOffre) return null;
   const d2 = addDays(p.dOffre, 2);
@@ -74,7 +73,6 @@ function slaDue(p: Prospect){
   return null;
 }
 
-// --- App ---
 export default function App(){
   const [tab,setTab] = useState<'dashboard'|'prospects'|'offres'|'referentiels'|'saisonnier'>('dashboard');
 
@@ -89,6 +87,7 @@ export default function App(){
   useEffect(()=>{ saveRefs(refs); },[refs]);
   useEffect(()=>{ getUsdEur().then(setUsdEur); },[]);
 
+  // ----- Formulaires -----
   const [pForm,setPForm]=useState<Prospect>({
     id:'', client:'', marche:'Maroc', produit:'', dContact: todayStr(),
     offre:'Non', dOffre:'', montant: undefined, statut:'À qualifier',
@@ -104,17 +103,19 @@ export default function App(){
   });
   useEffect(()=>{ setOForm(prev=> ({...prev, produit: prev.produit || (refs.produits[0]||'')})); },[refs]);
 
+  // ----- KPIs -----
   const offresEnv = prospects.filter(p=>p.offre==='Oui').length;
   const reps = prospects.filter(p=>p.reponse==='Oui').length;
   const signes = prospects.filter(p=>p.statut==='Signé').length;
   const tauxReponse = offresEnv? (reps/offresEnv):0;
   const tauxConv = offresEnv? (signes/offresEnv):0;
 
+  // ----- Tables “haut de page” (sans filtres) -----
   const ajd = todayStr();
   const relancesDuJour = useMemo(()=> prospects.filter(p=> p.relance && p.relance<=ajd && !['Signé','Perdu'].includes(p.statut)),[prospects]);
   const offresQuiExpirent = offres.filter(isExpiring);
 
-  // --- Scoring enrichi pour affichage et filtres ---
+  // ----- Scoring enrichi -----
   const scored = useMemo(()=>{
     return prospects.map(p=>{
       const interactions30 = offres.filter(o => o.client.toLowerCase()===p.client.toLowerCase() && (diffDays(todayStr(), o.date_offre) as number) <= 30).length;
@@ -123,11 +124,13 @@ export default function App(){
     });
   },[prospects,offres]);
 
+  // ----- Suggestion prix -----
   const suggestion = useMemo(()=>{
     if (!oForm.produit || !oForm.marche || !oForm.incoterm) return null;
     return suggestPrice(offres, { produit: oForm.produit, marche: oForm.marche, incoterm: oForm.incoterm, calibre: oForm.calibre });
   },[oForm,offres]);
 
+  // ----- Actions -----
   function addProspect(){
     if(!pForm.client.trim()) return alert('Client / Prospect obligatoire');
     if(!pForm.produit) return alert('Produit obligatoire');
@@ -223,7 +226,7 @@ export default function App(){
   // UI helper: Tab button
   const TabBtn = ({id,label}:{id:any;label:string})=>(
     <button
-      className={`px-4 py-2 rounded-xl border ${tab===id?'bg-blue-600 text-white border-blue-600':'bg-white text-gray-700 hover:bg-gray-50'}`}
+      className={`tab ${tab===id?'tab-active':''}`}
       onClick={()=>setTab(id)}
     >
       {label}
@@ -231,71 +234,33 @@ export default function App(){
   );
 
   // ===========================
-  // ======  FILTRES UI  =======
+  // =====  FILTRES BAS   ======
   // ===========================
 
-  // --- Dashboard: Relances ---
-  const [fRel, setFRel] = useState({ id:'', client:'', marche:'', produit:'', statut:'', relance:'', sla:'' as ''|'Relance J+2 due'|'Relance J+7 due'|'—' });
-  const relancesFiltered = useMemo(()=>{
-    return relancesDuJour.filter(r=>{
-      if (fRel.id && !includesCI(r.id, fRel.id)) return false;
-      if (fRel.client && !includesCI(r.client, fRel.client)) return false;
-      if (fRel.marche && r.marche!==fRel.marche) return false;
-      if (fRel.produit && !includesCI(r.produit, fRel.produit)) return false;
-      if (fRel.statut && r.statut!==fRel.statut) return false;
-      if (fRel.relance && r.relance!==fRel.relance) return false;
-      if (fRel.sla){
-        const s = slaDue(r) || '—';
-        if (s!==fRel.sla) return false;
-      }
-      return true;
-    });
-  },[relancesDuJour,fRel]);
-
-  // --- Dashboard: Offres expirant <72h ---
-  const [fExp, setFExp] = useState({ id:'', client:'', produit:'', incoterm:'', prixMin:'', prixMax:'', date:'', validite:'', expire:'' });
-  const expiringFiltered = useMemo(()=>{
-    return offresQuiExpirent.filter(o=>{
-      if (fExp.id && !includesCI(o.id, fExp.id)) return false;
-      if (fExp.client && !includesCI(o.client, fExp.client)) return false;
-      if (fExp.produit && !includesCI(o.produit, fExp.produit)) return false;
-      if (fExp.incoterm && o.incoterm!==fExp.incoterm) return false;
-      if (fExp.prixMin && o.prix_usd_kg < Number(fExp.prixMin)) return false;
-      if (fExp.prixMax && o.prix_usd_kg > Number(fExp.prixMax)) return false;
-      if (fExp.date && o.date_offre!==fExp.date) return false;
-      if (fExp.validite && String(o.validite_jours||'')!==fExp.validite) return false;
-      if (fExp.expire){
-        const exp = o.validite_jours? addDays(o.date_offre, o.validite_jours):'';
-        if (exp!==fExp.expire) return false;
-      }
-      return true;
-    });
-  },[offresQuiExpirent,fExp]);
-
-  // --- Dashboard: Scoring ---
+  // Dashboard (Priorités)
   const [fSco, setFSco] = useState({ scoreMin:'', scoreMax:'', grade:'', client:'', produit:'', statut:'', relance:'', nba:'' });
   const scoredFiltered = useMemo(()=>{
     return [...scored].filter((p:any)=>{
       if (fSco.scoreMin && p._score < Number(fSco.scoreMin)) return false;
       if (fSco.scoreMax && p._score > Number(fSco.scoreMax)) return false;
       if (fSco.grade && p._grade!==fSco.grade) return false;
-      if (fSco.client && !includesCI(p.client, fSco.client)) return false;
-      if (fSco.produit && !includesCI(p.produit, fSco.produit)) return false;
+      if (fSco.client && !p.client.toLowerCase().includes(fSco.client.toLowerCase())) return false;
+      if (fSco.produit && !p.produit.toLowerCase().includes(fSco.produit.toLowerCase())) return false;
       if (fSco.statut && p.statut!==fSco.statut) return false;
       if (fSco.relance && (p.relance||'') !== fSco.relance) return false;
-      if (fSco.nba && !includesCI(p._nba, fSco.nba)) return false;
+      if (fSco.nba && !p._nba.toLowerCase().includes(fSco.nba.toLowerCase())) return false;
       return true;
     }).sort((a:any,b:any)=> b._score - a._score);
   },[scored,fSco]);
 
-  // --- Prospects (liste principale) ---
+  // Prospects (liste)
   const [fPros, setFPros] = useState({ id:'', client:'', marche:'', produit:'', statut:'', relance:'', grade:'', scoreMin:'', scoreMax:'' });
   const prospectsFiltered = useMemo(()=>{
     return scored.filter((p:any)=>{
-      if (fPros.id && !includesCI(p.id, fPros.id)) return false;
-      if (fPros.client && !includesCI(p.client, fPros.client)) return false;
+      if (fPros.id && !p.id.toLowerCase().includes(fPros.id.toLowerCase())) return false;
+      if (fPros.client && !p.client.toLowerCase().includes(fPros.client.toLowerCase())) return false;
       if (fPros.marche && p.marche!==fPros.marche) return false;
-      if (fPros.produit && !includesCI(p.produit, fPros.produit)) return false;
+      if (fPros.produit && !p.produit.toLowerCase().includes(fPros.produit.toLowerCase())) return false;
       if (fPros.statut && p.statut!==fPros.statut) return false;
       if (fPros.relance && (p.relance||'')!==fPros.relance) return false;
       if (fPros.grade && p._grade!==fPros.grade) return false;
@@ -305,16 +270,16 @@ export default function App(){
     }).sort((a:any,b:any)=> b._score - a._score);
   },[scored,fPros]);
 
-  // --- Offres (historique) ---
+  // Offres (historique)
   const [fOff, setFOff] = useState({ id:'', prospect:'', client:'', marche:'', produit:'', calibre:'', incoterm:'', prixMin:'', prixMax:'', volMin:'', volMax:'', date:'', validite:'', statut:'' });
   const offresFiltered = useMemo(()=>{
     return offres.filter(o=>{
-      if (fOff.id && !includesCI(o.id, fOff.id)) return false;
-      if (fOff.prospect && !includesCI(o.prospectId||'', fOff.prospect)) return false;
-      if (fOff.client && !includesCI(o.client, fOff.client)) return false;
+      if (fOff.id && !o.id.toLowerCase().includes(fOff.id.toLowerCase())) return false;
+      if (fOff.prospect && !String(o.prospectId||'').toLowerCase().includes(fOff.prospect.toLowerCase())) return false;
+      if (fOff.client && !o.client.toLowerCase().includes(fOff.client.toLowerCase())) return false;
       if (fOff.marche && o.marche!==fOff.marche) return false;
-      if (fOff.produit && !includesCI(o.produit, fOff.produit)) return false;
-      if (fOff.calibre && !includesCI(o.calibre||'', fOff.calibre)) return false;
+      if (fOff.produit && !o.produit.toLowerCase().includes(fOff.produit.toLowerCase())) return false;
+      if (fOff.calibre && !String(o.calibre||'').toLowerCase().includes(fOff.calibre.toLowerCase())) return false;
       if (fOff.incoterm && o.incoterm!==fOff.incoterm) return false;
       if (fOff.prixMin && o.prix_usd_kg < Number(fOff.prixMin)) return false;
       if (fOff.prixMax && o.prix_usd_kg > Number(fOff.prixMax)) return false;
@@ -354,12 +319,20 @@ export default function App(){
       <AnimatePresence mode="wait">
         {tab==='dashboard' && (
           <motion.div key="dash" initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}} transition={{duration:.15}} className="space-y-6">
+            {/* KPI */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="kpi"><div className="kpi-label">Taux de réponse</div><div className="kpi-value">{(tauxReponse*100).toFixed(0)}%</div></div>
+              <div className="kpi"><div className="kpi-label">Taux de conversion</div><div className="kpi-value">{(tauxConv*100).toFixed(0)}%</div></div>
+              <div className="kpi"><div className="kpi-label">Prospects actifs</div><div className="kpi-value">{prospects.length}</div></div>
+            </div>
+
             <div className="card"><div className="card-body text-sm flex flex-wrap gap-6 items-center">
               <div><b>Rappels du jour :</b> {relancesDuJour.length===0 ? 'aucune relance due' : `${relancesDuJour.length} relance(s)`}</div>
               <div><b>Offres expirant &lt;72h :</b> {offresQuiExpirent.length}</div>
               <div><b>USD→EUR :</b> {(usdEur||0).toFixed(4)}</div>
             </div></div>
 
+            {/* Tables haut (SANS filtres) */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Relances à faire */}
               <div className="card">
@@ -368,38 +341,35 @@ export default function App(){
                   <table className="min-w-full text-sm">
                     <thead>
                       <tr>{['ID','Client','Marché','Produit','Statut','Prochaine relance','SLA'].map(h => <th key={h} className='th'>{h}</th>)}</tr>
-                      <tr>
-                        <th className="th"><input className="input" placeholder="filtrer" value={fRel.id} onChange={e=>setFRel({...fRel,id:e.target.value})}/></th>
-                        <th className="th"><input className="input" placeholder="filtrer" value={fRel.client} onChange={e=>setFRel({...fRel,client:e.target.value})}/></th>
-                        <th className="th">
-                          <select className="select" value={fRel.marche} onChange={e=>setFRel({...fRel,marche:e.target.value})}>
-                            <option value="">(tous)</option>{marches.map(m=><option key={m} value={m}>{m}</option>)}
-                          </select>
-                        </th>
-                        <th className="th"><input className="input" placeholder="filtrer" value={fRel.produit} onChange={e=>setFRel({...fRel,produit:e.target.value})}/></th>
-                        <th className="th">
-                          <select className="select" value={fRel.statut} onChange={e=>setFRel({...fRel,statut:e.target.value})}>
-                            <option value="">(tous)</option>{statutsProspect.map(s=><option key={s} value={s}>{s}</option>)}
-                          </select>
-                        </th>
-                        <th className="th"><input type="date" className="input" value={fRel.relance} onChange={e=>setFRel({...fRel,relance:e.target.value})}/></th>
-                        <th className="th">
-                          <select className="select" value={fRel.sla} onChange={e=>setFRel({...fRel,sla:e.target.value as any})}>
-                            <option value="">(tous)</option>
-                            <option>Relance J+2 due</option>
-                            <option>Relance J+7 due</option>
-                            <option>—</option>
-                          </select>
-                        </th>
-                      </tr>
                     </thead>
                     <tbody>
-                      {relancesFiltered.map(r => (
+                      {relancesDuJour.map(r => (
                         <tr key={r.id}>
-                          <td className='td'>{r.id}</td><td className='td'>{r.client}</td><td className='td'>{r.marche}</td><td className='td'>{r.produit}</td><td className='td'>{r.statut}</td><td className='td'>{r.relance}</td><td className='td'>{slaDue(r)||'—'}</td>
+                          <td className='td'>{r.id}</td>
+                          <td className='td'>{r.client}</td>
+                          <td className='td'>{r.marche}</td>
+                          <td className='td'>{r.produit}</td>
+                          <td className='td'>
+                            <span className={`badge ${
+                              r.statut==='Signé' ? 'badge-ok'
+                              : r.statut==='En négociation' ? 'badge-warn'
+                              : r.statut==='Perdu' ? 'badge-err' : ''}`}>
+                              {r.statut}
+                            </span>
+                          </td>
+                          <td className='td'>{r.relance}</td>
+                          <td className="td">
+                            {(() => {
+                              const s = slaDue(r);
+                              if (!s) return <span className="badge">—</span>;
+                              if (s.includes('J+2')) return <span className="badge badge-warn">Relance J+2 due</span>;
+                              if (s.includes('J+7')) return <span className="badge badge-err">Relance J+7 due</span>;
+                              return <span className="badge">{s}</span>;
+                            })()}
+                          </td>
                         </tr>
                       ))}
-                      {relancesFiltered.length===0 && <tr><td className='td text-center text-gray-500' colSpan={7}>Aucun résultat.</td></tr>}
+                      {relancesDuJour.length===0 && <tr><td className='td text-center text-gray-500' colSpan={7}>Aucun résultat.</td></tr>}
                     </tbody>
                   </table>
                 </div>
@@ -412,42 +382,32 @@ export default function App(){
                   <table className="min-w-full text-sm">
                     <thead>
                       <tr>{['ID','Client','Produit','Incoterm','Prix USD/kg','Date','Validité','Expire le'].map(h => <th key={h} className='th'>{h}</th>)}</tr>
-                      <tr>
-                        <th className="th"><input className="input" value={fExp.id} onChange={e=>setFExp({...fExp,id:e.target.value})}/></th>
-                        <th className="th"><input className="input" value={fExp.client} onChange={e=>setFExp({...fExp,client:e.target.value})}/></th>
-                        <th className="th"><input className="input" value={fExp.produit} onChange={e=>setFExp({...fExp,produit:e.target.value})}/></th>
-                        <th className="th">
-                          <select className="select" value={fExp.incoterm} onChange={e=>setFExp({...fExp,incoterm:e.target.value})}>
-                            <option value="">(tous)</option>
-                            {['FOB','CFR','CIF','EXW'].map(i=><option key={i} value={i}>{i}</option>)}
-                          </select>
-                        </th>
-                        <th className="th">
-                          <div className="flex gap-1">
-                            <input className="input" placeholder="min" value={fExp.prixMin} onChange={e=>setFExp({...fExp,prixMin:e.target.value})}/>
-                            <input className="input" placeholder="max" value={fExp.prixMax} onChange={e=>setFExp({...fExp,prixMax:e.target.value})}/>
-                          </div>
-                        </th>
-                        <th className="th"><input type="date" className="input" value={fExp.date} onChange={e=>setFExp({...fExp,date:e.target.value})}/></th>
-                        <th className="th"><input className="input" placeholder="ex: 15" value={fExp.validite} onChange={e=>setFExp({...fExp,validite:e.target.value})}/></th>
-                        <th className="th"><input type="date" className="input" value={fExp.expire} onChange={e=>setFExp({...fExp,expire:e.target.value})}/></th>
-                      </tr>
                     </thead>
                     <tbody>
-                      {expiringFiltered.map(o => (
+                      {offresQuiExpirent.map(o => (
                         <tr key={o.id}>
-                          <td className="td">{o.id}</td><td className="td">{o.client}</td><td className="td">{o.produit}</td><td className="td">{o.incoterm}</td>
-                          <td className="td">{o.prix_usd_kg.toFixed(2)}</td><td className="td">{o.date_offre}</td><td className="td">{o.validite_jours||'—'}</td><td className="td">{o.validite_jours? addDays(o.date_offre, o.validite_jours):'—'}</td>
+                          <td className="td">{o.id}</td>
+                          <td className="td">{o.client}</td>
+                          <td className="td">{o.produit}</td>
+                          <td className="td">{o.incoterm}</td>
+                          <td className="td">{o.prix_usd_kg.toFixed(2)}</td>
+                          <td className="td">{o.date_offre}</td>
+                          <td className="td">{o.validite_jours||'—'}</td>
+                          <td className="td">
+                            {o.validite_jours
+                              ? <span className="badge badge-warn">{addDays(o.date_offre, o.validite_jours)}</span>
+                              : <span className="badge">—</span>}
+                          </td>
                         </tr>
                       ))}
-                      {expiringFiltered.length===0 && <tr><td className='td text-center text-gray-500' colSpan={8}>Aucun résultat.</td></tr>}
+                      {offresQuiExpirent.length===0 && <tr><td className='td text-center text-gray-500' colSpan={8}>Aucun résultat.</td></tr>}
                     </tbody>
                   </table>
                 </div>
               </div>
             </div>
 
-            {/* Scoring */}
+            {/* Priorités (avec FILTRES) */}
             <div className="card">
               <div className="card-header">Priorités (Scoring A/B/C/D)</div>
               <div className="card-body overflow-auto">
@@ -485,7 +445,12 @@ export default function App(){
                         <td className="td">{p._grade}</td>
                         <td className="td">{p.client}</td>
                         <td className="td">{p.produit}</td>
-                        <td className="td">{p.statut}</td>
+                        <td className="td">
+                          <span className={`badge ${
+                            p.statut==='Signé' ? 'badge-ok'
+                            : p.statut==='En négociation' ? 'badge-warn'
+                            : p.statut==='Perdu' ? 'badge-err' : ''}`}>{p.statut}</span>
+                        </td>
                         <td className="td">{p.relance||'—'}</td>
                         <td className="td">{p._nba}</td>
                       </tr>
@@ -535,7 +500,7 @@ export default function App(){
               <div className="card-body flex justify-end"><button className="btn" onClick={addProspect}>Ajouter</button></div>
             </div>
 
-            {/* Prospects list + filtres */}
+            {/* Liste (avec FILTRES) */}
             <div className="card">
               <div className="card-header">Liste des prospects (édition inline + filtres)</div>
               <div className="card-body overflow-auto">
@@ -586,7 +551,15 @@ export default function App(){
                           </select>
                         </td>
                         <td className="td"><input className="input" type="date" value={p.relance||''} onChange={e=>updateProspectInline(p.id,{relance: e.target.value})}/></td>
-                        <td className="td">{slaDue(p)||'—'}</td>
+                        <td className="td">
+                          {(() => {
+                            const s = slaDue(p);
+                            if (!s) return <span className="badge">—</span>;
+                            if (s.includes('J+2')) return <span className="badge badge-warn">Relance J+2 due</span>;
+                            if (s.includes('J+7')) return <span className="badge badge-err">Relance J+7 due</span>;
+                            return <span className="badge">{s}</span>;
+                          })()}
+                        </td>
                       </tr>
                     ))}
                     {prospectsFiltered.length===0 && <tr><td className="td text-center text-gray-500" colSpan={9}>Aucun résultat.</td></tr>}
@@ -669,7 +642,7 @@ export default function App(){
               <div className="card-body flex justify-end"><button className="btn" onClick={addOffre}>Enregistrer l’offre</button></div>
             </div>
 
-            {/* Historique offres + filtres */}
+            {/* Historique des offres (avec FILTRES) */}
             <div className="card">
               <div className="card-header">Historique des offres</div>
               <div className="card-body overflow-auto">
