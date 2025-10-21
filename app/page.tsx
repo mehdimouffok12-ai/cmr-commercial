@@ -9,7 +9,9 @@ import {
   getUsdEur, resetAll, nextId, addDays, monthStr
 } from '../components/storage';
 
-// --- Constantes ---
+/* -----------------------
+   Constantes & utilitaires
+------------------------ */
 const marches = ['Maroc','GCC','Afrique de l’Ouest','Autres'] as const;
 const statutsProspect = ['À qualifier','Offre envoyée','En négociation','Perdu','Signé'] as const;
 const ouiNon = ['Oui','Non'] as const;
@@ -20,11 +22,13 @@ function fmtUSD(v?: number|null, digits=2){ if(v==null||isNaN(v)) return '—'; 
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function diffDays(aISO?: string, bISO?: string){ if(!aISO||!bISO) return null; return Math.round((new Date(aISO).getTime()-new Date(bISO).getTime())/86400000); }
 
-// --- Scoring ---
+/* -----------------------
+   Scoring & suggestions
+------------------------ */
 function scoreProspect(p: Prospect, offres: Offre[], interactions30j: number) {
   const lastDate = p.relance || p.dContact;
   const daysSince = lastDate ? Math.max(0, diffDays(todayStr(), lastDate) || 0) : 999;
-  const recence = Math.max(0, 100 - Math.min(100, daysSince*5)); // 0..100
+  const recence = Math.max(0, 100 - Math.min(100, daysSince*5));
   const freq = Math.min(100, interactions30j*25);
   const pot = offres
     .filter(o => o.client.toLowerCase()===p.client.toLowerCase() && (!o.statut_offre || ['Envoyée','En négociation'].includes(o.statut_offre)))
@@ -44,7 +48,6 @@ function scoreProspect(p: Prospect, offres: Offre[], interactions30j: number) {
   return { score, grade, nba };
 }
 
-// --- Suggestions d’offres (médiane 30j) ---
 function median(nums: number[]){ if(nums.length===0) return null; const s=[...nums].sort((a,b)=>a-b); const m=Math.floor(s.length/2); return s.length%2? s[m] : (s[m-1]+s[m])/2; }
 function suggestPrice(offres: Offre[], params: {produit: string; marche: string; incoterm: Offre['incoterm']; calibre?: string}) {
   const now = new Date().getTime();
@@ -61,7 +64,6 @@ function suggestPrice(offres: Offre[], params: {produit: string; marche: string;
   return { mediane: med, min, max };
 }
 
-// --- Validité & SLA ---
 function isExpiring(o: Offre){ if(!o.validite_jours) return false; const exp = addDays(o.date_offre, o.validite_jours); const d = diffDays(exp, todayStr()); return d!==null && d <= 3; }
 function slaDue(p: Prospect){
   if (p.offre!=='Oui' || !p.dOffre) return null;
@@ -73,6 +75,9 @@ function slaDue(p: Prospect){
   return null;
 }
 
+/* -----------------------
+   Composant principal
+------------------------ */
 export default function App(){
   const [tab,setTab] = useState<'dashboard'|'prospects'|'offres'|'referentiels'|'saisonnier'>('dashboard');
 
@@ -110,7 +115,7 @@ export default function App(){
   const tauxReponse = offresEnv? (reps/offresEnv):0;
   const tauxConv = offresEnv? (signes/offresEnv):0;
 
-  // ----- Tables “haut de page” (sans filtres) -----
+  // ----- Tables haut (sans filtres) -----
   const ajd = todayStr();
   const relancesDuJour = useMemo(()=> prospects.filter(p=> p.relance && p.relance<=ajd && !['Signé','Perdu'].includes(p.statut)),[prospects]);
   const offresQuiExpirent = offres.filter(isExpiring);
@@ -225,18 +230,12 @@ export default function App(){
 
   // UI helper: Tab button
   const TabBtn = ({id,label}:{id:any;label:string})=>(
-    <button
-      className={`tab ${tab===id?'tab-active':''}`}
-      onClick={()=>setTab(id)}
-    >
-      {label}
-    </button>
+    <button className={`tab ${tab===id?'tab-active':''}`} onClick={()=>setTab(id)}>{label}</button>
   );
 
-  // ===========================
-  // =====  FILTRES BAS   ======
-  // ===========================
-
+  /* -----------------------
+     FILTRES BAS (résumés)
+  ------------------------ */
   // Dashboard (Priorités)
   const [fSco, setFSco] = useState({ scoreMin:'', scoreMax:'', grade:'', client:'', produit:'', statut:'', relance:'', nba:'' });
   const scoredFiltered = useMemo(()=>{
@@ -292,8 +291,11 @@ export default function App(){
     });
   },[offres,fOff]);
 
+  /* -----------------------
+     Rendu
+  ------------------------ */
   return (
-    <div className="container py-6 space-y-6">
+    <div className="container py-6 space-y-8">
       {/* Header */}
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <h1 className="text-xl font-semibold">CMR Commercial – Eurotrade</h1>
@@ -320,10 +322,11 @@ export default function App(){
         {tab==='dashboard' && (
           <motion.div key="dash" initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}} transition={{duration:.15}} className="space-y-6">
             {/* KPI */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="kpi"><div className="kpi-label">Taux de réponse</div><div className="kpi-value">{(tauxReponse*100).toFixed(0)}%</div></div>
               <div className="kpi"><div className="kpi-label">Taux de conversion</div><div className="kpi-value">{(tauxConv*100).toFixed(0)}%</div></div>
               <div className="kpi"><div className="kpi-label">Prospects actifs</div><div className="kpi-value">{prospects.length}</div></div>
+              <div className="kpi"><div className="kpi-label">USD→EUR</div><div className="kpi-value">{(usdEur||0).toFixed(4)}</div></div>
             </div>
 
             <div className="card"><div className="card-body text-sm flex flex-wrap gap-6 items-center">
@@ -337,7 +340,7 @@ export default function App(){
               {/* Relances à faire */}
               <div className="card">
                 <div className="card-header">Relances à faire aujourd’hui</div>
-                <div className="card-body overflow-auto">
+                <div className="card-body table-wrap">
                   <table className="min-w-full text-sm">
                     <thead>
                       <tr>{['ID','Client','Marché','Produit','Statut','Prochaine relance','SLA'].map(h => <th key={h} className='th'>{h}</th>)}</tr>
@@ -378,7 +381,7 @@ export default function App(){
               {/* Expirations */}
               <div className="card">
                 <div className="card-header">Offres qui expirent &lt; 72h</div>
-                <div className="card-body overflow-auto">
+                <div className="card-body table-wrap">
                   <table className="min-w-full text-sm">
                     <thead>
                       <tr>{['ID','Client','Produit','Incoterm','Prix USD/kg','Date','Validité','Expire le'].map(h => <th key={h} className='th'>{h}</th>)}</tr>
@@ -410,7 +413,7 @@ export default function App(){
             {/* Priorités (avec FILTRES) */}
             <div className="card">
               <div className="card-header">Priorités (Scoring A/B/C/D)</div>
-              <div className="card-body overflow-auto">
+              <div className="card-body table-wrap">
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr>{['Score','Grade','Client','Produit','Statut','Relance','Next Best Action'].map(h => <th key={h} className='th'>{h}</th>)}</tr>
@@ -468,7 +471,7 @@ export default function App(){
             {/* Formulaire */}
             <div className="card">
               <div className="card-header">Ajouter un prospect</div>
-              <div className="card-body grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="card-body grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 <div>
                   <label className="text-sm text-gray-600">Client / Prospect</label>
                   <input list="lstClients" className="input" placeholder="ex: Congelcam" value={pForm.client} onChange={e=>setPForm({...pForm, client:e.target.value})}/>
@@ -503,7 +506,7 @@ export default function App(){
             {/* Liste (avec FILTRES) */}
             <div className="card">
               <div className="card-header">Liste des prospects (édition inline + filtres)</div>
-              <div className="card-body overflow-auto">
+              <div className="card-body table-wrap">
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr>{['Score','Grade','ID','Client','Marché','Produit','Statut','Relance','SLA'].map(h => <th key={h} className='th'>{h}</th>)}</tr>
@@ -575,7 +578,7 @@ export default function App(){
             {/* Formulaire offre */}
             <div className="card">
               <div className="card-header">Nouvelle offre (USD/kg)</div>
-              <div className="card-body grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="card-body grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 <div>
                   <label className="text-sm text-gray-600">Lier à un prospect</label>
                   <select className="select" value={(oForm as any).prospectId||''} onChange={e=>{
@@ -627,17 +630,17 @@ export default function App(){
                 <div><label className="text-sm text-gray-600">Autres frais (USD/kg)</label><input className="input" type="number" step="0.01" value={oForm.autres_frais_usd_kg??''} onChange={e=>setOForm({...oForm, autres_frais_usd_kg:e.target.value?Number(e.target.value):undefined})}/></div>
 
                 {suggestion && (
-                  <div className="md:col-span-3 text-sm text-gray-600">
+                  <div className="md:col-span-3 xl:col-span-4 text-sm text-gray-600">
                     Suggestion (30j, {oForm.marche} / {oForm.produit} / {oForm.incoterm}) :
                     médiane <b>{suggestion.mediane.toFixed(2)} USD/kg</b> — min {suggestion.min.toFixed(2)} — max {suggestion.max.toFixed(2)}.
                   </div>
                 )}
 
-                <div className="md:col-span-3 text-sm">
+                <div className="md:col-span-3 xl:col-span-4 text-sm">
                   <b>Coût total</b>: {fmtUSD(cout_usd_kg)} /kg — <b>Marge</b>: {fmtUSD(marge_usd_kg)} /kg, {fmtUSD(marge_totale,0)} totale.
                 </div>
 
-                <div className="md:col-span-3"><label className="text-sm text-gray-600">Note</label><input className="input" placeholder="Conditions, navire, délai..." value={oForm.note||''} onChange={e=>setOForm({...oForm, note:e.target.value})}/></div>
+                <div className="md:col-span-3 xl:col-span-4"><label className="text-sm text-gray-600">Note</label><input className="input" placeholder="Conditions, navire, délai..." value={oForm.note||''} onChange={e=>setOForm({...oForm, note:e.target.value})}/></div>
               </div>
               <div className="card-body flex justify-end"><button className="btn" onClick={addOffre}>Enregistrer l’offre</button></div>
             </div>
@@ -645,7 +648,7 @@ export default function App(){
             {/* Historique des offres (avec FILTRES) */}
             <div className="card">
               <div className="card-header">Historique des offres</div>
-              <div className="card-body overflow-auto">
+              <div className="card-body table-wrap">
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr>{['ID','Prospect','Client','Marché','Produit','Calibre','Incoterm','Prix USD/kg','Volume (kg)','Date','Validité','Statut'].map(h => <th key={h} className='th'>{h}</th>)}</tr>
@@ -756,7 +759,7 @@ export default function App(){
         {tab==='saisonnier' && (
           <motion.div key="season" initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}} transition={{duration:.15}} className="card">
             <div className="card-header">Analyse saisonnière (simple)</div>
-            <div className="card-body overflow-auto">
+            <div className="card-body table-wrap">
               <table className="min-w-full text-sm">
                 <thead>
                   <tr>
