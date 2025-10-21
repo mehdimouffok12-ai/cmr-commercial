@@ -197,6 +197,26 @@ export default function App(){
     setProspects(prev => prev.map(p => p.id===id ? {...p, ...patch} : p));
   }
 
+  // ➕ EDITION INLINE OFFRE (+ cascade prospect)
+  function updateOffreInline(id: string, patch: Partial<Offre>) {
+    setOffres(prev => prev.map(o => (o.id === id ? { ...o, ...patch } : o)));
+    if (patch.statut_offre) {
+      const off = offres.find(o => o.id === id);
+      if (off?.prospectId) {
+        setProspects(prev =>
+          prev.map(p => {
+            if (p.id !== off.prospectId) return p;
+            let newStatut = p.statut;
+            if (patch.statut_offre === 'Acceptée') newStatut = 'Signé';
+            else if (patch.statut_offre === 'En négociation') newStatut = 'En négociation';
+            else if (patch.statut_offre === 'Envoyée' && p.statut === 'À qualifier') newStatut = 'Offre envoyée';
+            return { ...p, statut: newStatut };
+          })
+        );
+      }
+    }
+  }
+
   function resetData(){
     if(confirm('Réinitialiser toutes les données (prospects, offres, référentiels, FX) ?')) { resetAll(); location.reload(); }
   }
@@ -703,7 +723,16 @@ export default function App(){
                         <td className="td">{o.volume_kg.toLocaleString()}</td>
                         <td className="td">{o.date_offre}</td>
                         <td className="td">{o.validite_jours||'—'}</td>
-                        <td className="td">{o.statut_offre}</td>
+                        {/* ▼▼ Statut éditable inline ▼▼ */}
+                        <td className="td">
+                          <select
+                            className="select"
+                            value={o.statut_offre}
+                            onChange={e => updateOffreInline(o.id, { statut_offre: e.target.value as Offre['statut_offre'] })}
+                          >
+                            {statutsOffre.map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                        </td>
                       </tr>
                     ))}
                     {offresFiltered.length===0 && <tr><td className="td text-center text-gray-500" colSpan={12}>Aucun résultat.</td></tr>}
