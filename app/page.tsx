@@ -21,9 +21,9 @@ const statutsOffre = ['Envoyée','En négociation','Acceptée','Refusée'] as co
 
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function diffDays(aISO?: string, bISO?: string){ if(!aISO||!bISO) return null; return Math.round((new Date(aISO).getTime()-new Date(bISO).getTime())/86400000); }
-function fmtUSD(n?: number|null){ if(n==null||isNaN(n)) return '—'; return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(n); }
 function median(nums: number[]){ if(nums.length===0) return null; const s=[...nums].sort((a,b)=>a-b); const m=Math.floor(s.length/2); return s.length%2? s[m] : (s[m-1]+s[m])/2; }
 function isExpiring(o:Offre){ if(!o.validite_jours) return false; const exp = addDays(o.date_offre, o.validite_jours); const d = diffDays(exp, todayStr()); return d!==null && d<=3; }
+function clamp(n:number,min:number,max:number){ return Math.max(min,Math.min(max,n)); }
 
 /* ===========================
    Scoring / Suggestions
@@ -82,7 +82,7 @@ export default function Page(){
   const [oForm,setOForm]=useState<Offre>({
     id:'', client:'', marche:'Maroc', produit:'', calibre:'', incoterm:'CFR',
     prix_usd_kg:0, volume_kg:0, date_offre: todayStr(), validite_jours:15, statut_offre:'Envoyée',
-    prix_achat_usd_kg: undefined, fret_usd_kg: undefined, autres_frais_usd_kg: undefined, note:''
+    prix_achat_usd_kg: undefined, fret_usd_kg: undefined, autres_frais_usd_kg: undefined, note:'', prospectId: undefined
   });
   useEffect(()=>{ setOForm(prev=>({...prev, produit: prev.produit || (refs.produits[0]||'')})); },[refs]);
 
@@ -110,6 +110,16 @@ export default function Page(){
     : null
   ,[oForm,offres]);
 
+  /* ----- Liaisons Référentiels (auto-ajout si saisie libre) ----- */
+  function ensureClientInRefs(name:string){
+    const n = name.trim(); if(!n) return;
+    if(!refs.clients.some(c=>c.toLowerCase()===n.toLowerCase())){ upsertClient(n); setRefs(loadRefs()); }
+  }
+  function ensureProduitInRefs(name:string){
+    const n = name.trim(); if(!n) return;
+    if(!refs.produits.some(c=>c.toLowerCase()===n.toLowerCase())){ upsertProduit(n); setRefs(loadRefs()); }
+  }
+
   /* ----- Actions ----- */
   function addProspect(){
     if(!pForm.client.trim()) return alert('Client / Prospect obligatoire');
@@ -117,9 +127,13 @@ export default function Page(){
     if(pForm.offre==='Oui' && !pForm.dOffre) return alert("Date d'offre requise");
     if(pForm.reponse==='Oui' && !pForm.dReponse) return alert("Date de réponse requise");
     if(pForm.statut==='Signé' && !pForm.dSignature) return alert("Date de signature requise");
+
+    ensureClientInRefs(pForm.client);
+    ensureProduitInRefs(pForm.produit);
+
     const rec: Prospect = { ...pForm, id: nextId('PR', prospects), montant: pForm.montant ?? null };
     setProspects([rec, ...prospects]);
-    upsertClient(rec.client); upsertProduit(rec.produit); setRefs(loadRefs());
+
     setPForm({...pForm, id:'', client:'', produit: refs.produits[0]||'', dContact: todayStr(), offre:'Non', dOffre:'', montant: undefined, statut:'À qualifier', relance:'', reponse:'Non', dReponse:'', cause:'', fournisseur:'', dSignature:'', note:''});
   }
 
@@ -128,18 +142,29 @@ export default function Page(){
     if(!oForm.produit) return alert('Produit obligatoire');
     if(!oForm.prix_usd_kg || oForm.prix_usd_kg<=0) return alert('Prix USD/kg requis (>0)');
     if(!oForm.volume_kg || oForm.volume_kg<=0) return alert('Volume (kg) requis (>0)');
+
+    ensureClientInRefs(oForm.client);
+    ensureProduitInRefs(oForm.produit);
+
     if (suggestion?.mediane){
       const delta = Math.abs(oForm.prix_usd_kg - suggestion.mediane)/suggestion.mediane;
       if (delta>0.03 && !confirm(`⚠️ Prix s’écarte de ${(delta*100).toFixed(1)}% de la médiane (${suggestion.mediane.toFixed(2)} USD/kg). Continuer ?`)) return;
     }
-    const last = [...prospects].filter(p=>p.client.toLowerCase()===oForm.client.toLowerCase()).sort((a,b)=> (b.dContact||'').localeCompare(a.dContact||''))[0];
-    const rec: Offre = { ...oForm, id: nextId('OF', offres), prospectId: last?.id };
-    setOffres([rec, ...offres]);
-    if (last?.id){
-      setProspects(prev => prev.map(p => p.id===last.id ? {...p, offre:'Oui', dOffre:oForm.date_offre, statut: p.statut==='À qualifier'?'Offre envoyée':p.statut } : p));
+
+    let prospectId = oForm.prospectId;
+    if (!prospectId){
+      const last = [...prospects].filter(p=>p.client.toLowerCase()===oForm.client.toLowerCase()).sort((a,b)=> (b.dContact||'').localeCompare(a.dContact||''))[0];
+      prospectId = last?.id;
     }
-    upsertClient(oForm.client); upsertProduit(oForm.produit); setRefs(loadRefs());
-    setOForm({ ...oForm, id:'', client:'', produit: refs.produits[0]||'', calibre:'', incoterm:'CFR', prix_usd_kg:0, volume_kg:0, date_offre: todayStr(), validite_jours:15, statut_offre:'Envoyée', prix_achat_usd_kg: undefined, fret_usd_kg: undefined, autres_frais_usd_kg: undefined, note:'' });
+
+    const rec: Offre = { ...oForm, id: nextId('OF', offres), prospectId };
+    setOffres([rec, ...offres]);
+
+    if (prospectId){
+      setProspects(prev => prev.map(p => p.id===prospectId ? {...p, offre:'Oui', dOffre:oForm.date_offre, statut: p.statut==='À qualifier'?'Offre envoyée':p.statut } : p));
+    }
+
+    setOForm({ id:'', client:'', marche:'Maroc', produit: refs.produits[0]||'', calibre:'', incoterm:'CFR', prix_usd_kg:0, volume_kg:0, date_offre: todayStr(), validite_jours:15, statut_offre:'Envoyée', prix_achat_usd_kg: undefined, fret_usd_kg: undefined, autres_frais_usd_kg: undefined, note:'', prospectId: undefined });
   }
 
   function updateProspectInline(id:string, patch: Partial<Prospect>){
@@ -188,8 +213,41 @@ export default function Page(){
   }
 
   /* ===========================
+     Données Graphiques (Dashboard)
+=========================== */
+  // Opérations signées = offres Acceptées (plus fiable pour marge)
+  const offresAcceptees = useMemo(()=> offres.filter(o=>o.statut_offre==='Acceptée'),[offres]);
+
+  // Camembert marchés (répartition des acceptées par marché)
+  const pieMarkets = useMemo(()=>{
+    const map: Record<string, number> = {};
+    for (const o of offresAcceptees){ map[o.marche] = (map[o.marche]||0) + 1; }
+    const arr = Object.entries(map).map(([label,value])=>({label,value}));
+    const total = arr.reduce((s,a)=>s+a.value,0) || 1;
+    return { data: arr, total };
+  },[offresAcceptees]);
+
+  // Histogramme par client : nb opérations + marge moyenne USD/kg
+  const barClients = useMemo(()=>{
+    const rec: Record<string, {count:number; avgMargin:number}> = {};
+    for (const o of offresAcceptees){
+      const cost = (o.prix_achat_usd_kg||0)+(o.fret_usd_kg||0)+(o.autres_frais_usd_kg||0);
+      const marginKg = o.prix_usd_kg - cost;
+      const key = o.client;
+      if(!rec[key]) rec[key]={count:0, avgMargin:0};
+      const r=rec[key];
+      // moyenne incrémentale
+      r.avgMargin = (r.avgMargin*r.count + marginKg)/(r.count+1);
+      r.count += 1;
+    }
+    const arr = Object.entries(rec).map(([client,v])=>({client, ...v}));
+    arr.sort((a,b)=> b.count-a.count);
+    return arr.slice(0,12); // top 12
+  },[offresAcceptees]);
+
+  /* ===========================
      Rendu
-  =========================== */
+=========================== */
   const produitsList = refs.produits.length? refs.produits : ['Crevette Vannamei (Équateur)'];
 
   return (
@@ -219,10 +277,31 @@ export default function Page(){
         <div className="space-y-6">
           {/* KPI */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="p-4 rounded-xl border"><div className="text-xs text-gray-500">Taux de réponse</div><div className="text-2xl font-semibold">{(tauxReponse*100).toFixed(0)}%</div></div>
-            <div className="p-4 rounded-xl border"><div className="text-xs text-gray-500">Taux de conversion</div><div className="text-2xl font-semibold">{(tauxConv*100).toFixed(0)}%</div></div>
-            <div className="p-4 rounded-xl border"><div className="text-xs text-gray-500">Prospects actifs</div><div className="text-2xl font-semibold">{prospects.length}</div></div>
-            <div className="p-4 rounded-xl border"><div className="text-xs text-gray-500">USD→EUR</div><div className="text-2xl font-semibold">{usdEur}</div></div>
+            <Kpi title="Taux de réponse" value={`${(tauxReponse*100).toFixed(0)}%`} />
+            <Kpi title="Taux de conversion" value={`${(tauxConv*100).toFixed(0)}%`} />
+            <Kpi title="Prospects actifs" value={String(prospects.length)} />
+            <Kpi title="USD → EUR" value={String(usdEur)} />
+          </div>
+
+          {/* Graphiques */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="rounded-xl border">
+              <div className="px-4 py-3 border-b font-medium">Opérations signées par marché (camembert)</div>
+              <div className="p-4">
+                {pieMarkets.data.length===0
+                  ? <div className="text-sm text-gray-500">Aucune offre acceptée.</div>
+                  : <PieChart width={360} height={260} data={pieMarkets.data} />}
+              </div>
+            </div>
+
+            <div className="rounded-xl border">
+              <div className="px-4 py-3 border-b font-medium">Opérations signées par client (barres) & marge moyenne (USD/kg)</div>
+              <div className="p-4">
+                {barClients.length===0
+                  ? <div className="text-sm text-gray-500">Aucune offre acceptée.</div>
+                  : <BarChart width={520} height={260} data={barClients} />}
+              </div>
+            </div>
           </div>
 
           {/* Relances du jour */}
@@ -250,59 +329,6 @@ export default function Page(){
               )}
             </div>
           </div>
-
-          {/* Offres expirant <72h */}
-          <div className="rounded-xl border">
-            <div className="px-4 py-3 border-b font-medium">Offres qui expirent &lt; 72h</div>
-            <div className="p-4">
-              {!offresQuiExpirent.length ? <div className="text-sm text-gray-500">Aucune offre en expiration.</div> : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead><tr className="text-gray-500"><th className="text-left p-2">ID</th><th className="text-left p-2">Client</th><th className="text-left p-2">Produit</th><th className="text-left p-2">Prix USD/kg</th><th className="text-left p-2">Date</th><th className="text-left p-2">Validité</th></tr></thead>
-                    <tbody>
-                      {offresQuiExpirent.map(o=>(
-                        <tr key={o.id} className="border-t">
-                          <td className="p-2">{o.id}</td>
-                          <td className="p-2">{o.client}</td>
-                          <td className="p-2">{o.produit}</td>
-                          <td className="p-2">{o.prix_usd_kg}</td>
-                          <td className="p-2">{o.date_offre}</td>
-                          <td className="p-2">{o.validite_jours}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Priorités (scoring) */}
-          <div className="rounded-xl border">
-            <div className="px-4 py-3 border-b font-medium">Priorités (Scoring A/B/C/D)</div>
-            <div className="p-4">
-              {!scored.length ? <div className="text-sm text-gray-500">Aucun prospect pour le moment.</div> : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead><tr className="text-gray-500"><th className="text-left p-2">Score</th><th className="text-left p-2">Grade</th><th className="text-left p-2">Client</th><th className="text-left p-2">Produit</th><th className="text-left p-2">Statut</th><th className="text-left p-2">Relance</th><th className="text-left p-2">Next Best Action</th></tr></thead>
-                    <tbody>
-                      {scored.sort((a:any,b:any)=> b._score-a._score).map((p:any)=>(
-                        <tr key={p.id} className="border-t">
-                          <td className="p-2">{p._score}</td>
-                          <td className="p-2">{p._grade}</td>
-                          <td className="p-2">{p.client}</td>
-                          <td className="p-2">{p.produit}</td>
-                          <td className="p-2">{p.statut}</td>
-                          <td className="p-2">{p.relance||'—'}</td>
-                          <td className="p-2">{p._nba}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
         </div>
       )}
 
@@ -315,68 +341,44 @@ export default function Page(){
             <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <div className="text-xs text-gray-500 mb-1">Client / Prospect</div>
-                <input className="w-full border rounded-lg px-3 py-2" placeholder="ex: Congelcam" value={pForm.client} onChange={e=>setPForm({...pForm, client:e.target.value})}/>
+                <input list="clients-list" className="w-full border rounded-lg px-3 py-2" placeholder="ex: Congelcam" value={pForm.client}
+                  onChange={e=>setPForm({...pForm, client:e.target.value})}
+                  onBlur={()=>ensureClientInRefs(pForm.client)}
+                />
+                <datalist id="clients-list">
+                  {refs.clients.map(c=><option key={c} value={c} />)}
+                </datalist>
               </div>
+
               <div>
                 <div className="text-xs text-gray-500 mb-1">Marché</div>
                 <select className="w-full border rounded-lg px-3 py-2" value={pForm.marche} onChange={e=>setPForm({...pForm, marche:e.target.value as any})}>
                   {marches.map(m=><option key={m} value={m}>{m}</option>)}
                 </select>
               </div>
+
               <div>
                 <div className="text-xs text-gray-500 mb-1">Produit</div>
-                <select className="w-full border rounded-lg px-3 py-2" value={pForm.produit} onChange={e=>setPForm({...pForm, produit:e.target.value})}>
-                  {produitsList.map(p=><option key={p} value={p}>{p}</option>)}
-                </select>
+                <input list="produits-list" className="w-full border rounded-lg px-3 py-2" value={pForm.produit}
+                  onChange={e=>setPForm({...pForm, produit:e.target.value})}
+                  onBlur={()=>ensureProduitInRefs(pForm.produit)}
+                />
+                <datalist id="produits-list">
+                  {refs.produits.map(p=><option key={p} value={p} />)}
+                </datalist>
               </div>
 
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Date 1er contact</div>
-                <input type="date" className="w-full border rounded-lg px-3 py-2" value={pForm.dContact||''} onChange={e=>setPForm({...pForm, dContact:e.target.value})}/>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Offre envoyée ?</div>
-                <select className="w-full border rounded-lg px-3 py-2" value={pForm.offre} onChange={e=>setPForm({...pForm, offre:e.target.value as any})}>
-                  {ouiNon.map(v=><option key={v} value={v}>{v}</option>)}
-                </select>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Date offre</div>
-                <input type="date" className="w-full border rounded-lg px-3 py-2" value={pForm.dOffre||''} onChange={e=>setPForm({...pForm, dOffre:e.target.value})}/>
-              </div>
+              <div><div className="text-xs text-gray-500 mb-1">Date 1er contact</div><input type="date" className="w-full border rounded-lg px-3 py-2" value={pForm.dContact||''} onChange={e=>setPForm({...pForm, dContact:e.target.value})}/></div>
+              <div><div className="text-xs text-gray-500 mb-1">Offre envoyée ?</div><select className="w-full border rounded-lg px-3 py-2" value={pForm.offre} onChange={e=>setPForm({...pForm, offre:e.target.value as any})}>{ouiNon.map(v=><option key={v} value={v}>{v}</option>)}</select></div>
+              <div><div className="text-xs text-gray-500 mb-1">Date offre</div><input type="date" className="w-full border rounded-lg px-3 py-2" value={pForm.dOffre||''} onChange={e=>setPForm({...pForm, dOffre:e.target.value})}/></div>
 
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Montant (USD)</div>
-                <input type="number" className="w-full border rounded-lg px-3 py-2" value={pForm.montant??''} onChange={e=>setPForm({...pForm, montant:Number(e.target.value)||undefined})}/>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Statut</div>
-                <select className="w-full border rounded-lg px-3 py-2" value={pForm.statut} onChange={e=>setPForm({...pForm, statut:e.target.value as any})}>
-                  {statutsProspect.map(s=><option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Prochaine relance</div>
-                <input type="date" className="w-full border rounded-lg px-3 py-2" value={pForm.relance||''} onChange={e=>setPForm({...pForm, relance:e.target.value})}/>
-              </div>
+              <div><div className="text-xs text-gray-500 mb-1">Montant (USD)</div><input type="number" className="w-full border rounded-lg px-3 py-2" value={pForm.montant??''} onChange={e=>setPForm({...pForm, montant:Number(e.target.value)||undefined})}/></div>
+              <div><div className="text-xs text-gray-500 mb-1">Statut</div><select className="w-full border rounded-lg px-3 py-2" value={pForm.statut} onChange={e=>setPForm({...pForm, statut:e.target.value as any})}>{statutsProspect.map(s=><option key={s} value={s}>{s}</option>)}</select></div>
+              <div><div className="text-xs text-gray-500 mb-1">Prochaine relance</div><input type="date" className="w-full border rounded-lg px-3 py-2" value={pForm.relance||''} onChange={e=>setPForm({...pForm, relance:e.target.value})}/></div>
 
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Réponse client ?</div>
-                <select className="w-full border rounded-lg px-3 py-2" value={pForm.reponse} onChange={e=>setPForm({...pForm, reponse:e.target.value as any})}>
-                  {ouiNon.map(v=><option key={v} value={v}>{v}</option>)}
-                </select>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Date réponse</div>
-                <input type="date" className="w-full border rounded-lg px-3 py-2" value={pForm.dReponse||''} onChange={e=>setPForm({...pForm, dReponse:e.target.value})}/>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Cause de perte</div>
-                <select className="w-full border rounded-lg px-3 py-2" value={pForm.cause||''} onChange={e=>setPForm({...pForm, cause:e.target.value})}>
-                  <option value="">—</option>
-                  {causes.map(c=><option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
+              <div><div className="text-xs text-gray-500 mb-1">Réponse client ?</div><select className="w-full border rounded-lg px-3 py-2" value={pForm.reponse} onChange={e=>setPForm({...pForm, reponse:e.target.value as any})}>{ouiNon.map(v=><option key={v} value={v}>{v}</option>)}</select></div>
+              <div><div className="text-xs text-gray-500 mb-1">Date réponse</div><input type="date" className="w-full border rounded-lg px-3 py-2" value={pForm.dReponse||''} onChange={e=>setPForm({...pForm, dReponse:e.target.value})}/></div>
+              <div><div className="text-xs text-gray-500 mb-1">Cause de perte</div><select className="w-full border rounded-lg px-3 py-2" value={pForm.cause||''} onChange={e=>setPForm({...pForm, cause:e.target.value})}><option value="">—</option>{causes.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
 
               <div className="md:col-span-3">
                 <button className="px-4 py-2 rounded-lg bg-blue-600 text-white" onClick={addProspect}>Ajouter</button>
@@ -425,9 +427,47 @@ export default function Page(){
           <div className="rounded-xl border">
             <div className="px-4 py-3 border-b font-medium">Ajouter une offre</div>
             <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div><div className="text-xs text-gray-500 mb-1">Client</div><input className="w-full border rounded-lg px-3 py-2" value={oForm.client} onChange={e=>setOForm({...oForm, client:e.target.value})}/></div>
-              <div><div className="text-xs text-gray-500 mb-1">Marché</div><select className="w-full border rounded-lg px-3 py-2" value={oForm.marche} onChange={e=>setOForm({...oForm, marche:e.target.value as any})}>{marches.map(m=><option key={m} value={m}>{m}</option>)}</select></div>
-              <div><div className="text-xs text-gray-500 mb-1">Produit</div><select className="w-full border rounded-lg px-3 py-2" value={oForm.produit} onChange={e=>setOForm({...oForm, produit:e.target.value})}>{produitsList.map(p=><option key={p} value={p}>{p}</option>)}</select></div>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Prospect (optionnel)</div>
+                <select className="w-full border rounded-lg px-3 py-2" value={oForm.prospectId||''} onChange={e=>{
+                  const id = e.target.value || undefined;
+                  const pr = prospects.find(p=>p.id===id);
+                  setOForm(prev=>({
+                    ...prev,
+                    prospectId: id,
+                    client: pr ? pr.client : prev.client,
+                    marche: pr ? pr.marche : prev.marche,
+                    produit: pr ? pr.produit : prev.produit
+                  }));
+                }}>
+                  <option value="">—</option>
+                  {prospects.map(p=><option key={p.id} value={p.id}>{p.id} — {p.client}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Client</div>
+                <input list="clients-list" className="w-full border rounded-lg px-3 py-2" value={oForm.client}
+                  onChange={e=>setOForm({...oForm, client:e.target.value})}
+                  onBlur={()=>ensureClientInRefs(oForm.client)}
+                />
+              </div>
+
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Marché</div>
+                <select className="w-full border rounded-lg px-3 py-2" value={oForm.marche} onChange={e=>setOForm({...oForm, marche:e.target.value as any})}>
+                  {marches.map(m=><option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Produit</div>
+                <input list="produits-list" className="w-full border rounded-lg px-3 py-2" value={oForm.produit}
+                  onChange={e=>setOForm({...oForm, produit:e.target.value})}
+                  onBlur={()=>ensureProduitInRefs(oForm.produit)}
+                />
+              </div>
+
               <div><div className="text-xs text-gray-500 mb-1">Calibre</div><input className="w-full border rounded-lg px-3 py-2" value={oForm.calibre||''} onChange={e=>setOForm({...oForm, calibre:e.target.value})}/></div>
               <div><div className="text-xs text-gray-500 mb-1">Incoterm</div><select className="w-full border rounded-lg px-3 py-2" value={oForm.incoterm} onChange={e=>setOForm({...oForm, incoterm:e.target.value as any})}><option value="CFR">CFR</option><option value="FOB">FOB</option><option value="CIF">CIF</option></select></div>
               <div><div className="text-xs text-gray-500 mb-1">Prix USD/kg</div><input type="number" className="w-full border rounded-lg px-3 py-2" value={oForm.prix_usd_kg} onChange={e=>setOForm({...oForm, prix_usd_kg:Number(e.target.value)||0})}/></div>
@@ -435,6 +475,7 @@ export default function Page(){
               <div><div className="text-xs text-gray-500 mb-1">Date</div><input type="date" className="w-full border rounded-lg px-3 py-2" value={oForm.date_offre} onChange={e=>setOForm({...oForm, date_offre:e.target.value})}/></div>
               <div><div className="text-xs text-gray-500 mb-1">Validité (jours)</div><input type="number" className="w-full border rounded-lg px-3 py-2" value={oForm.validite_jours??''} onChange={e=>setOForm({...oForm, validite_jours:Number(e.target.value)||undefined})}/></div>
               <div><div className="text-xs text-gray-500 mb-1">Statut</div><select className="w-full border rounded-lg px-3 py-2" value={oForm.statut_offre} onChange={e=>setOForm({...oForm, statut_offre:e.target.value as any})}>{statutsOffre.map(s=><option key={s} value={s}>{s}</option>)}</select></div>
+
               <div className="md:col-span-3">
                 {suggestion ? <div className="text-xs text-gray-600 mb-2">Suggestion prix 30j : médiane <b>{suggestion.mediane?.toFixed(2)}</b> USD/kg (min {suggestion.min.toFixed(2)} – max {suggestion.max.toFixed(2)})</div> : <div className="text-xs text-gray-400 mb-2">Aucune référence 30j pour ce paramétrage.</div>}
                 <button className="px-4 py-2 rounded-lg bg-blue-600 text-white" onClick={addOffre}>Enregistrer l’offre</button>
@@ -508,13 +549,12 @@ export default function Page(){
         </div>
       )}
 
-      {/* SAISONNIER (placeholder simple) */}
+      {/* SAISONNIER (placeholder) */}
       {tab==='saisonnier' && (
         <div className="rounded-xl border">
           <div className="px-4 py-3 border-b font-medium">Analyse saisonnière</div>
           <div className="p-4 text-sm text-gray-600">
-            Ajoute ici tes graphes saisonniers (prix moyens par espèce / mois).  
-            (Le moteur de données reste prêt : tu peux alimenter `refs.benchmarks` si besoin).
+            Ajoute ici tes graphes saisonniers (prix moyens par espèce / mois).
           </div>
         </div>
       )}
@@ -523,8 +563,17 @@ export default function Page(){
 }
 
 /* ===========================
-   Petit composant Référentiels
+   Petits composants
 =========================== */
+function Kpi({title,value}:{title:string;value:string}){
+  return (
+    <div className="p-4 rounded-xl border">
+      <div className="text-xs text-gray-500">{title}</div>
+      <div className="text-2xl font-semibold">{value}</div>
+    </div>
+  );
+}
+
 function RefEditor({items, placeholder, onChange}:{items:string[]; placeholder:string; onChange:(vals:string[])=>void}){
   const [val,setVal]=useState('');
   return (
@@ -542,5 +591,89 @@ function RefEditor({items, placeholder, onChange}:{items:string[]; placeholder:s
         {!items?.length && <div className="text-sm text-gray-500">Aucune entrée.</div>}
       </div>
     </div>
+  );
+}
+
+/* ===========================
+   Graphiques SVG
+=========================== */
+function PieChart({width,height,data}:{width:number;height:number;data:{label:string;value:number}[]}) {
+  const r = Math.min(width,height)/2 - 10;
+  const cx = width/2, cy = height/2;
+  const total = data.reduce((s,d)=>s+d.value,0) || 1;
+
+  let angleStart = -Math.PI/2;
+  const colors = ['#2563eb','#16a34a','#f97316','#a855f7','#0891b2','#dc2626','#0ea5e9','#84cc16'];
+
+  return (
+    <svg width={width} height={height}>
+      {data.map((d,i)=>{
+        const angle = (d.value/total) * Math.PI*2;
+        const angleEnd = angleStart + angle;
+        const x1 = cx + r*Math.cos(angleStart);
+        const y1 = cy + r*Math.sin(angleStart);
+        const x2 = cx + r*Math.cos(angleEnd);
+        const y2 = cy + r*Math.sin(angleEnd);
+        const large = angle > Math.PI ? 1 : 0;
+        const path = `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`;
+        const mid = angleStart + angle/2;
+        const lx = cx + (r+14)*Math.cos(mid);
+        const ly = cy + (r+14)*Math.sin(mid);
+        angleStart = angleEnd;
+        return (
+          <g key={i}>
+            <path d={path} fill={colors[i%colors.length]} opacity={0.9}/>
+            <text x={lx} y={ly} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#334155">
+              {d.label} ({Math.round(d.value/total*100)}%)
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function BarChart({width,height,data}:{width:number;height:number;data:{client:string;count:number;avgMargin:number}[]}) {
+  const padding = {l:40, r:20, t:10, b:50};
+  const w = width - padding.l - padding.r;
+  const h = height - padding.t - padding.b;
+  const maxCount = Math.max(1, ...data.map(d=>d.count));
+  const barW = Math.max(12, Math.floor(w / data.length) - 8);
+
+  return (
+    <svg width={width} height={height}>
+      {/* axes */}
+      <line x1={padding.l} y1={padding.t} x2={padding.l} y2={padding.t+h} stroke="#cbd5e1"/>
+      <line x1={padding.l} y1={padding.t+h} x2={padding.l+w} y2={padding.t+h} stroke="#cbd5e1"/>
+
+      {data.map((d,i)=>{
+        const x = padding.l + i*(barW+8);
+        const barH = Math.round((d.count/maxCount)*h);
+        const y = padding.t + (h - barH);
+        return (
+          <g key={i}>
+            <rect x={x} y={y} width={barW} height={barH} fill="#2563eb" opacity={0.9} />
+            <text x={x+barW/2} y={y-6} fontSize="10" textAnchor="middle" fill="#111827">
+              {d.avgMargin.toFixed(2)}
+            </text>
+            <text x={x+barW/2} y={padding.t+h+12} fontSize="10" textAnchor="end" transform={`rotate(45 ${x+barW/2},${padding.t+h+12})`} fill="#334155">
+              {d.client}
+            </text>
+          </g>
+        );
+      })}
+
+      {/* graduations Y (counts) */}
+      {[0,0.25,0.5,0.75,1].map((t,i)=>{
+        const y = padding.t + h - t*h;
+        const val = Math.round(maxCount*t);
+        return (
+          <g key={i}>
+            <line x1={padding.l-3} x2={padding.l} y1={y} y2={y} stroke="#64748b"/>
+            <text x={padding.l-6} y={y} fontSize="10" textAnchor="end" dominantBaseline="central" fill="#64748b">{val}</text>
+          </g>
+        );
+      })}
+    </svg>
   );
 }
