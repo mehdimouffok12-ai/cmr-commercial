@@ -23,7 +23,6 @@ function todayStr(){ return new Date().toISOString().slice(0,10); }
 function diffDays(aISO?: string, bISO?: string){ if(!aISO||!bISO) return null; return Math.round((new Date(aISO).getTime()-new Date(bISO).getTime())/86400000); }
 function median(nums: number[]){ if(nums.length===0) return null; const s=[...nums].sort((a,b)=>a-b); const m=Math.floor(s.length/2); return s.length%2? s[m] : (s[m-1]+s[m])/2; }
 function isExpiring(o:Offre){ if(!o.validite_jours) return false; const exp = addDays(o.date_offre, o.validite_jours); const d = diffDays(exp, todayStr()); return d!==null && d<=3; }
-function clamp(n:number,min:number,max:number){ return Math.max(min,Math.min(max,n)); }
 
 /* ===========================
    Scoring / Suggestions
@@ -196,11 +195,19 @@ export default function Page(){
       Statut:p.statut, 'Prochaine relance':p.relance||'', 'Réponse client':p.reponse, 'Date réponse':p.dReponse||'',
       'Cause de perte':p.cause||'', Fournisseur:p.fournisseur||'', 'Date signature':p.dSignature||'', Commentaire:p.note||''
     })));
-    const wsOff = XLSX.utils.json_to_sheet(offres.map(o=>({
-      ID:o.id, Prospect:o.prospectId||'', Client:o.client, Marché:o.marche, Produit:o.produit, Calibre:o.calibre||'',
-      Incoterm:o.incoterm, 'Prix USD/kg':o.prix_usd_kg, 'Volume (kg)':o.volume_kg, Date:o.date_offre, Validité:o.validite_jours??'',
-      Statut:o.statut_offre, 'Prix achat USD/kg':o.prix_achat_usd_kg??'', 'Fret USD/kg':o.fret_usd_kg??'', 'Autres frais USD/kg':o.autres_frais_usd_kg??'', Note:o.note||''
-    })));
+    const wsOff = XLSX.utils.json_to_sheet(offres.map(o=>{
+      const cost = (o.prix_achat_usd_kg||0)+(o.fret_usd_kg||0)+(o.autres_frais_usd_kg||0);
+      const margeKg = o.prix_usd_kg - cost;
+      const margeTot = margeKg * (o.volume_kg||0);
+      return {
+        ID:o.id, Prospect:o.prospectId||'', Client:o.client, Marché:o.marche, Produit:o.produit, Calibre:o.calibre||'',
+        Incoterm:o.incoterm, 'Prix USD/kg':o.prix_usd_kg, 'Prix achat USD/kg':o.prix_achat_usd_kg??'',
+        'Fret USD/kg':o.fret_usd_kg??'', 'Autres frais USD/kg':o.autres_frais_usd_kg??'',
+        'Marge USD/kg':Number.isFinite(margeKg)?Number(margeKg.toFixed(2)):'' ,
+        'Volume (kg)':o.volume_kg, 'Marge totale USD':Number.isFinite(margeTot)?Number(margeTot.toFixed(0)):'',
+        Date:o.date_offre, Validité:o.validite_jours??'', Statut:o.statut_offre, Note:o.note||''
+      };
+    }));
     const wsRefs = XLSX.utils.json_to_sheet([
       ...refs.clients.map(c=>({Type:'Client',Valeur:c})),
       ...refs.produits.map(p=>({Type:'Produit',Valeur:p}))
@@ -215,10 +222,8 @@ export default function Page(){
   /* ===========================
      Données Graphiques (Dashboard)
 =========================== */
-  // Opérations signées = offres Acceptées (plus fiable pour marge)
   const offresAcceptees = useMemo(()=> offres.filter(o=>o.statut_offre==='Acceptée'),[offres]);
 
-  // Camembert marchés (répartition des acceptées par marché)
   const pieMarkets = useMemo(()=>{
     const map: Record<string, number> = {};
     for (const o of offresAcceptees){ map[o.marche] = (map[o.marche]||0) + 1; }
@@ -227,7 +232,6 @@ export default function Page(){
     return { data: arr, total };
   },[offresAcceptees]);
 
-  // Histogramme par client : nb opérations + marge moyenne USD/kg
   const barClients = useMemo(()=>{
     const rec: Record<string, {count:number; avgMargin:number}> = {};
     for (const o of offresAcceptees){
@@ -236,19 +240,23 @@ export default function Page(){
       const key = o.client;
       if(!rec[key]) rec[key]={count:0, avgMargin:0};
       const r=rec[key];
-      // moyenne incrémentale
       r.avgMargin = (r.avgMargin*r.count + marginKg)/(r.count+1);
       r.count += 1;
     }
     const arr = Object.entries(rec).map(([client,v])=>({client, ...v}));
     arr.sort((a,b)=> b.count-a.count);
-    return arr.slice(0,12); // top 12
+    return arr.slice(0,12);
   },[offresAcceptees]);
 
   /* ===========================
      Rendu
 =========================== */
   const produitsList = refs.produits.length? refs.produits : ['Crevette Vannamei (Équateur)'];
+
+  // calcul marge temps réel (formulaire)
+  const formCost = (oForm.prix_achat_usd_kg||0)+(oForm.fret_usd_kg||0)+(oForm.autres_frais_usd_kg||0);
+  const formMargeKg = oForm.prix_usd_kg - formCost;
+  const formMargeTot = formMargeKg * (oForm.volume_kg||0);
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
@@ -286,7 +294,7 @@ export default function Page(){
           {/* Graphiques */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="rounded-xl border">
-              <div className="px-4 py-3 border-b font-medium">Opérations signées par marché (camembert)</div>
+              <div className="px-4 py-3 border-b font-medium">Opérations acceptées par marché (camembert)</div>
               <div className="p-4">
                 {pieMarkets.data.length===0
                   ? <div className="text-sm text-gray-500">Aucune offre acceptée.</div>
@@ -295,7 +303,7 @@ export default function Page(){
             </div>
 
             <div className="rounded-xl border">
-              <div className="px-4 py-3 border-b font-medium">Opérations signées par client (barres) & marge moyenne (USD/kg)</div>
+              <div className="px-4 py-3 border-b font-medium">Opérations acceptées par client & marge moyenne (USD/kg)</div>
               <div className="p-4">
                 {barClients.length===0
                   ? <div className="text-sm text-gray-500">Aucune offre acceptée.</div>
@@ -470,14 +478,27 @@ export default function Page(){
 
               <div><div className="text-xs text-gray-500 mb-1">Calibre</div><input className="w-full border rounded-lg px-3 py-2" value={oForm.calibre||''} onChange={e=>setOForm({...oForm, calibre:e.target.value})}/></div>
               <div><div className="text-xs text-gray-500 mb-1">Incoterm</div><select className="w-full border rounded-lg px-3 py-2" value={oForm.incoterm} onChange={e=>setOForm({...oForm, incoterm:e.target.value as any})}><option value="CFR">CFR</option><option value="FOB">FOB</option><option value="CIF">CIF</option></select></div>
-              <div><div className="text-xs text-gray-500 mb-1">Prix USD/kg</div><input type="number" className="w-full border rounded-lg px-3 py-2" value={oForm.prix_usd_kg} onChange={e=>setOForm({...oForm, prix_usd_kg:Number(e.target.value)||0})}/></div>
+
+              <div><div className="text-xs text-gray-500 mb-1">Prix USD/kg (vente)</div><input type="number" className="w-full border rounded-lg px-3 py-2" value={oForm.prix_usd_kg} onChange={e=>setOForm({...oForm, prix_usd_kg:Number(e.target.value)||0})}/></div>
               <div><div className="text-xs text-gray-500 mb-1">Volume (kg)</div><input type="number" className="w-full border rounded-lg px-3 py-2" value={oForm.volume_kg} onChange={e=>setOForm({...oForm, volume_kg:Number(e.target.value)||0})}/></div>
               <div><div className="text-xs text-gray-500 mb-1">Date</div><input type="date" className="w-full border rounded-lg px-3 py-2" value={oForm.date_offre} onChange={e=>setOForm({...oForm, date_offre:e.target.value})}/></div>
+
+              {/* >>> Coûts pour marge */}
+              <div><div className="text-xs text-gray-500 mb-1">Prix d’achat USD/kg</div><input type="number" className="w-full border rounded-lg px-3 py-2" value={oForm.prix_achat_usd_kg??''} onChange={e=>setOForm({...oForm, prix_achat_usd_kg: Number(e.target.value)||undefined})}/></div>
+              <div><div className="text-xs text-gray-500 mb-1">Fret USD/kg</div><input type="number" className="w-full border rounded-lg px-3 py-2" value={oForm.fret_usd_kg??''} onChange={e=>setOForm({...oForm, fret_usd_kg: Number(e.target.value)||undefined})}/></div>
+              <div><div className="text-xs text-gray-500 mb-1">Autres frais USD/kg</div><input type="number" className="w-full border rounded-lg px-3 py-2" value={oForm.autres_frais_usd_kg??''} onChange={e=>setOForm({...oForm, autres_frais_usd_kg: Number(e.target.value)||undefined})}/></div>
+
               <div><div className="text-xs text-gray-500 mb-1">Validité (jours)</div><input type="number" className="w-full border rounded-lg px-3 py-2" value={oForm.validite_jours??''} onChange={e=>setOForm({...oForm, validite_jours:Number(e.target.value)||undefined})}/></div>
               <div><div className="text-xs text-gray-500 mb-1">Statut</div><select className="w-full border rounded-lg px-3 py-2" value={oForm.statut_offre} onChange={e=>setOForm({...oForm, statut_offre:e.target.value as any})}>{statutsOffre.map(s=><option key={s} value={s}>{s}</option>)}</select></div>
 
+              {/* preview marge */}
+              <div className="md:col-span-3 text-sm text-gray-700">
+                Marge estimée : <b>{Number.isFinite(formMargeKg)?formMargeKg.toFixed(2):'—'} USD/kg</b> ·
+                Total : <b>{Number.isFinite(formMargeTot)?formMargeTot.toFixed(0):'—'} USD</b>
+              </div>
+
               <div className="md:col-span-3">
-                {suggestion ? <div className="text-xs text-gray-600 mb-2">Suggestion prix 30j : médiane <b>{suggestion.mediane?.toFixed(2)}</b> USD/kg (min {suggestion.min.toFixed(2)} – max {suggestion.max.toFixed(2)})</div> : <div className="text-xs text-gray-400 mb-2">Aucune référence 30j pour ce paramétrage.</div>}
+                {suggestion ? <div className="text-xs text-gray-600 mb-2">Suggestion prix 30j : médiane <b>{suggestion.mediane?.toFixed(2)}</b> USD/kg (min {suggestion.max?.toFixed(2)} – max {suggestion.min?.toFixed(2)})</div> : <div className="text-xs text-gray-400 mb-2">Aucune référence 30j pour ce paramétrage.</div>}
                 <button className="px-4 py-2 rounded-lg bg-blue-600 text-white" onClick={addOffre}>Enregistrer l’offre</button>
               </div>
             </div>
@@ -492,29 +513,40 @@ export default function Page(){
                   <thead><tr className="text-gray-500">
                     <th className="text-left p-2">ID</th><th className="text-left p-2">Prospect</th><th className="text-left p-2">Client</th>
                     <th className="text-left p-2">Produit</th><th className="text-left p-2">Calibre</th><th className="text-left p-2">Incoterm</th>
-                    <th className="text-left p-2">Prix USD/kg</th><th className="text-left p-2">Volume (kg)</th>
+                    <th className="text-left p-2">Prix USD/kg</th><th className="text-left p-2">Prix achat</th><th className="text-left p-2">Fret</th><th className="text-left p-2">Autres</th>
+                    <th className="text-left p-2">Marge USD/kg</th><th className="text-left p-2">Volume (kg)</th><th className="text-left p-2">Marge totale USD</th>
                     <th className="text-left p-2">Date</th><th className="text-left p-2">Validité</th><th className="text-left p-2">Statut</th>
                   </tr></thead>
                   <tbody>
-                    {offres.map(o=>(
-                      <tr key={o.id} className="border-t">
-                        <td className="p-2">{o.id}</td>
-                        <td className="p-2">{o.prospectId||'—'}</td>
-                        <td className="p-2">{o.client}</td>
-                        <td className="p-2">{o.produit}</td>
-                        <td className="p-2">{o.calibre||'—'}</td>
-                        <td className="p-2">{o.incoterm}</td>
-                        <td className="p-2">{o.prix_usd_kg}</td>
-                        <td className="p-2">{o.volume_kg}</td>
-                        <td className="p-2">{o.date_offre}</td>
-                        <td className="p-2">{o.validite_jours??'—'}</td>
-                        <td className="p-2">
-                          <select className="border rounded px-2 py-1" value={o.statut_offre||'Envoyée'} onChange={e=>updateOffreInline(o.id,{statut_offre:e.target.value as any})}>
-                            {statutsOffre.map(s=><option key={s} value={s}>{s}</option>)}
-                          </select>
-                        </td>
-                      </tr>
-                    ))}
+                    {offres.map(o=>{
+                      const cost = (o.prix_achat_usd_kg||0)+(o.fret_usd_kg||0)+(o.autres_frais_usd_kg||0);
+                      const mKg = o.prix_usd_kg - cost;
+                      const mTot = mKg * (o.volume_kg||0);
+                      return (
+                        <tr key={o.id} className="border-t">
+                          <td className="p-2">{o.id}</td>
+                          <td className="p-2">{o.prospectId||'—'}</td>
+                          <td className="p-2">{o.client}</td>
+                          <td className="p-2">{o.produit}</td>
+                          <td className="p-2">{o.calibre||'—'}</td>
+                          <td className="p-2">{o.incoterm}</td>
+                          <td className="p-2">{o.prix_usd_kg}</td>
+                          <td className="p-2">{o.prix_achat_usd_kg??'—'}</td>
+                          <td className="p-2">{o.fret_usd_kg??'—'}</td>
+                          <td className="p-2">{o.autres_frais_usd_kg??'—'}</td>
+                          <td className="p-2">{Number.isFinite(mKg)?mKg.toFixed(2):'—'}</td>
+                          <td className="p-2">{o.volume_kg}</td>
+                          <td className="p-2">{Number.isFinite(mTot)?mTot.toFixed(0):'—'}</td>
+                          <td className="p-2">{o.date_offre}</td>
+                          <td className="p-2">{o.validite_jours??'—'}</td>
+                          <td className="p-2">
+                            <select className="border rounded px-2 py-1" value={o.statut_offre||'Envoyée'} onChange={e=>updateOffreInline(o.id,{statut_offre:e.target.value as any})}>
+                              {statutsOffre.map(s=><option key={s} value={s}>{s}</option>)}
+                            </select>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}
@@ -642,7 +674,6 @@ function BarChart({width,height,data}:{width:number;height:number;data:{client:s
 
   return (
     <svg width={width} height={height}>
-      {/* axes */}
       <line x1={padding.l} y1={padding.t} x2={padding.l} y2={padding.t+h} stroke="#cbd5e1"/>
       <line x1={padding.l} y1={padding.t+h} x2={padding.l+w} y2={padding.t+h} stroke="#cbd5e1"/>
 
@@ -663,7 +694,6 @@ function BarChart({width,height,data}:{width:number;height:number;data:{client:s
         );
       })}
 
-      {/* graduations Y (counts) */}
       {[0,0.25,0.5,0.75,1].map((t,i)=>{
         const y = padding.t + h - t*h;
         const val = Math.round(maxCount*t);
